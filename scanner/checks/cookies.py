@@ -1,3 +1,10 @@
+"""Flags de cookies: Secure, HttpOnly, SameSite.
+
+Vulnerabilidade: cookie de sessão sem HttpOnly é lido por JavaScript (XSS); sem Secure trafega
+em HTTP; sem SameSite fica exposto a CSRF.
+Exemplo: um XSS executa document.cookie e envia a sessão ao atacante, que assume a conta.
+Ref.: OWASP Session Management Cheat Sheet; CWE-614, CWE-1004, CWE-352.
+"""
 from ..finding import Finding, Severity
 
 CHECK = "cookies"

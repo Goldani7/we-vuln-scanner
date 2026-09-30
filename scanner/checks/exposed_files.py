@@ -1,3 +1,12 @@
+"""Arquivos sensíveis expostos.
+
+Vulnerabilidade: arquivos de configuração, backups e diretórios de controle de versão publicados
+por engano vazam segredos e código-fonte.
+Exemplo: GET /.git/config confirma um repositório exposto; ferramentas como git-dumper o baixam
+inteiro, incluindo senhas no histórico. /.env costuma conter chaves de banco e de API.
+Ref.: OWASP A05:2021 (Security Misconfiguration); CWE-538.
+Nota: testa só uma lista fixa e pequena de caminhos (sem brute-force).
+"""
 from urllib.parse import urljoin
 
 import requests

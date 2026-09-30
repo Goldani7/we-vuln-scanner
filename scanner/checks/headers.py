@@ -1,3 +1,11 @@
+"""Headers de segurança HTTP.
+
+Vulnerabilidade: sem CSP/X-Frame-Options/HSTS o navegador não tem instruções para bloquear
+XSS, clickjacking ou downgrade para HTTP.
+Exemplo: sem X-Frame-Options, o atacante embute o site num <iframe> invisível e engana o
+usuário a clicar em botões (clickjacking).
+Ref.: OWASP Secure Headers Project; OWASP A05:2021 (Security Misconfiguration); CWE-693.
+"""
 from ..finding import Finding, Severity
 
 CHECK = "headers"

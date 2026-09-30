@@ -1,3 +1,10 @@
+"""CORS permissivo.
+
+Vulnerabilidade: se o servidor reflete qualquer Origin (ou usa * com credenciais), um site
+malicioso consegue ler respostas autenticadas da vítima.
+Exemplo: evil.com faz fetch(api, {credentials:"include"}) e lê os dados privados do usuário logado.
+Ref.: OWASP WSTG-CLNT-07 (Testing CORS); CWE-942.
+"""
 import requests
 
 from ..finding import Finding, Severity

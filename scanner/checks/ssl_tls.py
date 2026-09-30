@@ -1,3 +1,10 @@
+"""TLS/SSL: versão do protocolo e validade do certificado.
+
+Vulnerabilidade: TLS 1.0/1.1 e SSL antigos têm falhas conhecidas; certificado expirado ou
+inválido treina usuários a ignorar avisos.
+Exemplo: POODLE (SSLv3) e BEAST (TLS 1.0) permitem a um atacante na rede decifrar trechos do tráfego.
+Ref.: OWASP A02:2021 (Cryptographic Failures); CWE-326, CWE-295.
+"""
 import socket
 import ssl
 from datetime import datetime, timezone
