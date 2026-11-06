@@ -26,8 +26,10 @@ CHECK_DESCRIPTIONS = {
                "certificados expirados permitem interceptação e quebram a confiança.",
     "cors": "Testa se o CORS aceita origens arbitrárias. Uma política permissiva deixa sites "
             "maliciosos ler respostas autenticadas do usuário.",
-    "exposed_files": "Procura arquivos sensíveis comuns (.env, .git, backups). Eles costumam "
-                     "vazar credenciais e código-fonte.",
+    "exposed_files": "Procura arquivos sensíveis comuns (.env, .git, backups) e valida o conteúdo "
+                     "para evitar falsos positivos. Eles costumam vazar credenciais e código-fonte.",
+    "misconfig": "Verifica redirecionamento HTTP→HTTPS, método TRACE, listagem de diretório e "
+                 "páginas de erro com stack trace, que vazam informação sobre o servidor.",
 }
 
 

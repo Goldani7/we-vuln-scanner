@@ -7,6 +7,7 @@ Ref.: OWASP A02:2021 (Cryptographic Failures); CWE-326, CWE-295.
 """
 import socket
 import ssl
+import warnings
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -14,12 +15,14 @@ from ..finding import Finding, Severity
 
 CHECK = "ssl_tls"
 WEAK_PROTOCOLS = {"SSLv2", "SSLv3", "TLSv1", "TLSv1.1"}
-PROBE_VERSIONS = {
-    "TLSv1": ssl.TLSVersion.TLSv1,
-    "TLSv1.1": ssl.TLSVersion.TLSv1_1,
-    "TLSv1.2": ssl.TLSVersion.TLSv1_2,
-    "TLSv1.3": ssl.TLSVersion.TLSv1_3,
-}
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", DeprecationWarning)  # TLSv1/1.1 são obsoletos, mas é o que sondamos
+    PROBE_VERSIONS = {
+        "TLSv1": ssl.TLSVersion.TLSv1,
+        "TLSv1.1": ssl.TLSVersion.TLSv1_1,
+        "TLSv1.2": ssl.TLSVersion.TLSv1_2,
+        "TLSv1.3": ssl.TLSVersion.TLSv1_3,
+    }
 
 
 def supported_protocols(host: str, port: int, timeout: int = 8) -> list:
@@ -34,12 +37,15 @@ def supported_protocols(host: str, port: int, timeout: int = 8) -> list:
             ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE  # só sondamos o handshake; o certificado é validado abaixo
-            ctx.minimum_version = ctx.maximum_version = version
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                ctx.minimum_version = ctx.maximum_version = version
             if version < ssl.TLSVersion.TLSv1_2:
                 ctx.set_ciphers("ALL:@SECLEVEL=0")
             with socket.create_connection((host, port), timeout=timeout) as sock:
-                with ctx.wrap_socket(sock, server_hostname=host):
-                    supported.append(name)
+                with ctx.wrap_socket(sock, server_hostname=host) as tls:
+                    if tls.version() == name:  # só conta se a versão negociada for a sondada
+                        supported.append(name)
         except (OSError, ssl.SSLError, ValueError):
             continue
     return supported

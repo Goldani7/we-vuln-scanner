@@ -25,9 +25,12 @@ def _parse(version: str) -> tuple:
 
 
 def severity_from_cvss(score) -> Severity:
+    """Faixas CVSS v3: 9.0+ crítico, 7.0+ alto, 4.0+ médio, abaixo disso baixo."""
     if score is None:
         return Severity.LOW
     if score >= 9:
+        return Severity.CRITICAL
+    if score >= 7:
         return Severity.HIGH
     if score >= 4:
         return Severity.MEDIUM
@@ -67,6 +70,8 @@ def _cve_findings(tech: str, version: str) -> list:
             f"{cve['description']} Detalhes: {cve['url']}",
             f"Atualize {tech} para uma versão sem esta vulnerabilidade.",
             {"cve": cve["id"], "cvss": score, "url": cve["url"], "tech": tech, "version": version},
+            evidence=f"{tech}/{version} (via header) casou com {cve['id']} por busca de palavra-chave na NVD",
+            references=[cve["url"]], confidence="low", rule_id="tech.cve",
         ))
     return findings
 
@@ -82,6 +87,7 @@ def check_tech_detection(response) -> list:
             f"{header}: {value}",
             "Oculte ou genericize este header para reduzir fingerprinting.",
             {"header": header, "value": value},
+            evidence=f"{header}: {value}", cwe="CWE-200", confidence="high", rule_id="tech.exposed-header",
         ))
         for tech, version in _TECH_RE.findall(value):
             findings.extend(_cve_findings(tech, version))
