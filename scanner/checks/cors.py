@@ -1,8 +1,8 @@
-"""CORS permissivo.
+"""Permissive CORS.
 
-Vulnerabilidade: se o servidor reflete qualquer Origin com credenciais permitidas, um site
-malicioso consegue ler respostas autenticadas da vítima.
-Exemplo: evil.com faz fetch(api, {credentials:"include"}) e lê os dados privados do usuário logado.
+Vulnerability: if the server reflects any Origin with credentials allowed, a malicious site can
+read the victim's authenticated responses.
+Example: evil.com does fetch(api, {credentials:"include"}) and reads the logged-in user's private data.
 Ref.: OWASP WSTG-CLNT-07 (Testing CORS); CWE-942.
 """
 from ..finding import Finding, Severity
@@ -11,7 +11,7 @@ from ..http import RequestFailed
 CHECK = "cors"
 TEST_ORIGIN = "https://evil-example-probe.test"
 REFERENCE = "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/07-Testing_Cross_Origin_Resource_Sharing"
-FIX = "Valide a origem contra uma allowlist explícita em vez de refleti-la, e só envie Allow-Credentials para origens confiáveis."
+FIX = "Validate the origin against an explicit allowlist instead of reflecting it, and only send Allow-Credentials for trusted origins."
 
 
 def _finding(severity, title, detail, evidence, meta, remediation=FIX, confidence="high", rule="cors.misconfig"):
@@ -25,7 +25,7 @@ async def check_cors(ctx) -> list:
         try:
             r = await ctx.client.request("GET", ctx.url, headers={"Origin": origin}, follow_redirects=True)
         except RequestFailed as e:
-            return [Finding(CHECK, Severity.INFO, "Não foi possível testar CORS", e.describe(),
+            return [Finding(CHECK, Severity.INFO, "Could not test CORS", e.describe(),
                             rule_id="cors.unreachable")]
         acao = r.headers.get("Access-Control-Allow-Origin")
         creds = r.headers.get("Access-Control-Allow-Credentials", "").lower() == "true"
@@ -35,24 +35,24 @@ async def check_cors(ctx) -> list:
 
         if reflected and creds:
             findings.append(_finding(
-                Severity.HIGH, "CORS reflete origem arbitrária com credenciais" if origin != "null"
-                else "CORS aceita Origin 'null' com credenciais",
-                "Qualquer site (ou iframe sandbox, no caso de 'null') consegue ler respostas "
-                "autenticadas da vítima.", evidence, meta))
+                Severity.HIGH, "CORS reflects an arbitrary origin with credentials" if origin != "null"
+                else "CORS accepts Origin 'null' with credentials",
+                "Any site (or a sandboxed iframe, in the 'null' case) can read the victim's "
+                "authenticated responses.", evidence, meta))
         elif reflected and origin != "null":
             findings.append(_finding(
-                Severity.LOW, "CORS reflete origem arbitrária (sem credenciais)",
-                "Sem credenciais só dados públicos são legíveis, mas a política é frouxa.",
+                Severity.LOW, "CORS reflects an arbitrary origin (no credentials)",
+                "Without credentials only public data is readable, but the policy is still loose.",
                 evidence, meta))
         elif acao == "*" and creds and origin != "null":
             findings.append(_finding(
-                Severity.MEDIUM, "CORS combina * com Allow-Credentials",
-                "Navegadores rejeitam esta combinação, mas ela indica configuração incorreta.",
+                Severity.MEDIUM, "CORS combines * with Allow-Credentials",
+                "Browsers reject this combination, but it signals a misconfiguration.",
                 evidence, meta))
         elif acao == "*" and origin != "null":
             findings.append(_finding(
-                Severity.LOW, "CORS permite qualquer origem",
-                "Access-Control-Allow-Origin: * (sem credenciais).", evidence, meta,
-                "Restrinja as origens se a API não for pública.", rule="cors.wildcard"))
-    return findings or [Finding(CHECK, Severity.INFO, "CORS sem configuração permissiva",
+                Severity.LOW, "CORS allows any origin",
+                "Access-Control-Allow-Origin: * (no credentials).", evidence, meta,
+                "Restrict the origins if the API isn't meant to be public.", rule="cors.wildcard"))
+    return findings or [Finding(CHECK, Severity.INFO, "CORS has no permissive configuration",
                                 rule_id="cors.ok")]

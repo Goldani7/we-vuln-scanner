@@ -17,64 +17,64 @@ FAIL_LEVELS = {"critical": 4, "high": 3, "medium": 2, "low": 1, "none": None}
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="web-vuln-scanner",
-        description="Scanner passivo de vulnerabilidades web e de e-mail/DNS. "
-                    "Use apenas em alvos autorizados.",
+        description="Passive web and email/DNS vulnerability scanner. "
+                    "Use only against authorized targets.",
     )
     p.add_argument("target_pos", nargs="?", metavar="target",
-                   help="alvo (URL ou domínio); alternativa posicional a --target")
-    p.add_argument("-t", "--target", help="URL ou domínio alvo (ex.: https://exemplo.com ou exemplo.com)")
+                   help="target (URL or domain); positional alternative to --target")
+    p.add_argument("-t", "--target", help="target URL or domain (e.g. https://example.com or example.com)")
     p.add_argument("-m", "--mode", choices=MODES, default="full",
-                   help="web = checks HTTP/TLS; email = SPF/DKIM/DMARC/DNSBL; "
-                        "recon = subdomínios (crt.sh); full = todos (default)")
+                   help="web = HTTP/TLS checks; email = SPF/DKIM/DMARC/DNSBL; "
+                        "recon = subdomains (crt.sh); full = everything (default)")
     p.add_argument("-o", "--output",
-                   help="salva o relatório neste arquivo; o formato vem da extensão "
+                   help="save the report to this file; the format comes from the extension "
                         "(.json, .md, .sarif, .html)")
     p.add_argument("-f", "--format", choices=["text", "json", "md", "sarif", "html"],
-                   help="formato do relatório (default: text no console, ou pela extensão de --output)")
-    p.add_argument("-v", "--verbose", action="store_true", help="mostra logs de depuração")
+                   help="report format (default: text on the console, or the --output extension)")
+    p.add_argument("-v", "--verbose", action="store_true", help="show debug logs")
     p.add_argument("--rich", action="store_true",
-                   help="banner, barra de progresso por check e tabela colorida no terminal "
-                        "(requer a biblioteca 'rich'; não afeta -o/--format)")
-    p.add_argument("--no-color", action="store_true", help="com --rich: desliga as cores (ex.: terminal sem suporte)")
-    p.add_argument("--checks", help="checks web separados por vírgula (default: todos; veja --list-checks)")
-    p.add_argument("--list-checks", action="store_true", help="lista os checks disponíveis (inclui plugins) e sai")
-    p.add_argument("--scope", metavar="ESCOPO.txt",
-                   help="arquivo com os alvos autorizados; toda requisição fora dele é bloqueada, "
-                        "inclusive redirecionamentos")
+                   help="banner, per-check progress bar and colorized table in the terminal "
+                        "(requires the 'rich' library; does not affect -o/--format)")
+    p.add_argument("--no-color", action="store_true", help="with --rich: turn off colors (e.g. unsupported terminal)")
+    p.add_argument("--checks", help="comma-separated web checks (default: all; see --list-checks)")
+    p.add_argument("--list-checks", action="store_true", help="list the available checks (plugins included) and exit")
+    p.add_argument("--scope", metavar="SCOPE.txt",
+                   help="file with the authorized targets; every request outside it is blocked, "
+                        "including redirects")
     p.add_argument("--allow-active", action="store_true",
-                   help="permite checks ativos/intrusivos; exige --scope e autorização expressa do dono do alvo")
+                   help="allow active/intrusive checks; requires --scope and explicit authorization from the target owner")
     p.add_argument("--ports", metavar="22,80,443",
-                   help="portas para o check 'portscan' (default: ~25 portas de serviços comuns)")
-    p.add_argument("--baseline", metavar="RELATORIO.json",
-                   help="compara com um relatório JSON anterior e marca achados novos/resolvidos")
+                   help="ports for the 'portscan' check (default: ~25 common service ports)")
+    p.add_argument("--baseline", metavar="REPORT.json",
+                   help="compare against a previous JSON report and mark new/resolved findings")
     p.add_argument("--new-only", action="store_true",
-                   help="com --baseline: mostra e avalia --fail-on apenas nos achados novos")
-    p.add_argument("--no-info", action="store_true", help="oculta findings informativos")
-    p.add_argument("--timeout", type=float, default=10, help="timeout por requisição, em segundos")
+                   help="with --baseline: only show findings and evaluate --fail-on on new findings")
+    p.add_argument("--no-info", action="store_true", help="hide informational findings")
+    p.add_argument("--timeout", type=float, default=10, help="per-request timeout, in seconds")
 
-    net = p.add_argument_group("rede e desempenho")
+    net = p.add_argument_group("network and performance")
     net.add_argument("--rate", type=float, default=10,
-                     help="máximo de requisições por segundo no total; 0 = sem limite (default: 10)")
-    net.add_argument("--concurrency", type=int, default=10, help="requisições simultâneas (default: 10)")
+                     help="maximum total requests per second; 0 = unlimited (default: 10)")
+    net.add_argument("--concurrency", type=int, default=10, help="simultaneous requests (default: 10)")
     net.add_argument("--retries", type=int, default=2,
-                     help="retentativas em timeout/429/5xx, respeitando Retry-After (default: 2)")
-    net.add_argument("--proxy", help="proxy http://host:porta ou socks5://host:porta (ex.: Burp)")
-    net.add_argument("-H", "--header", action="append", default=[], metavar="'Nome: valor'",
-                     help="header extra em todas as requisições (repetível)")
+                     help="retries on timeout/429/5xx, honoring Retry-After (default: 2)")
+    net.add_argument("--proxy", help="proxy http://host:port or socks5://host:port (e.g. Burp)")
+    net.add_argument("-H", "--header", action="append", default=[], metavar="'Name: value'",
+                     help="extra header on every request (repeatable)")
     net.add_argument("--user-agent", default=DEFAULT_USER_AGENT,
-                     help="User-Agent (default identifica a ferramenta)")
+                     help="User-Agent (default identifies the tool)")
     net.add_argument("--insecure", action="store_true",
-                     help="não valida o certificado TLS do alvo (só para diagnóstico)")
+                     help="do not validate the target's TLS certificate (diagnostics only)")
     p.add_argument("--fail-on", choices=list(FAIL_LEVELS), default="high",
-                   help="exit code 2 se houver achado desta severidade ou maior (default: high)")
+                   help="exit code 2 if a finding of this severity or higher exists (default: high)")
     return p
 
 
 def _format_check_list() -> str:
-    rows = [f"{'CHECK':<16}{'CATEGORIA':<10}{'ATIVO':<7}{'ORIGEM':<22}DESCRIÇÃO"]
+    rows = [f"{'CHECK':<16}{'CATEGORY':<10}{'ACTIVE':<8}{'SOURCE':<22}DESCRIPTION"]
     for name in REGISTRY.names(include_active=True):
         s = REGISTRY.get(name)
-        rows.append(f"{s.name:<16}{s.category:<10}{'sim' if s.active else 'não':<7}{s.source:<22}"
+        rows.append(f"{s.name:<16}{s.category:<10}{'yes' if s.active else 'no':<8}{s.source:<22}"
                     f"{s.description[:70]}")
     return "\n".join(rows)
 
@@ -83,10 +83,10 @@ def _parse_ports(raw):
     try:
         ports = [int(p.strip()) for p in raw.split(",") if p.strip()]
     except ValueError:
-        raise ValueError(f"--ports deve ser uma lista de números separados por vírgula, não {raw!r}")
+        raise ValueError(f"--ports must be a comma-separated list of numbers, not {raw!r}")
     invalid = [p for p in ports if not 1 <= p <= 65535]
     if invalid:
-        raise ValueError(f"--ports fora do intervalo 1-65535: {invalid}")
+        raise ValueError(f"--ports out of the 1-65535 range: {invalid}")
     return ports
 
 
@@ -95,13 +95,13 @@ def _parse_headers(raw):
     for item in raw:
         name, sep, value = item.partition(":")
         if not sep or not name.strip():
-            raise ValueError(f"header inválido (use 'Nome: valor'): {item!r}")
+            raise ValueError(f"invalid header (use 'Name: value'): {item!r}")
         headers[name.strip()] = value.strip()
     return headers
 
 
 def _resolve_format(args):
-    """Formato do relatório a partir de --format ou da extensão de --output."""
+    """Report format from --format, or from the --output extension."""
     if args.format:
         return args.format
     if args.output:
@@ -119,7 +119,7 @@ def main(argv=None) -> int:
         level=logging.DEBUG if args.verbose else logging.WARNING,
         format="%(levelname)s %(name)s: %(message)s", stream=sys.stderr,
     )
-    for noisy in ("httpx", "httpcore", "asyncio"):  # logs de transporte escondem o que importa
+    for noisy in ("httpx", "httpcore", "asyncio"):  # transport logs drown out what matters
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
     if args.list_checks:
@@ -127,29 +127,29 @@ def main(argv=None) -> int:
         return 0
     target = args.target or args.target_pos
     if not target:
-        parser.error("informe o alvo com --target/-t")
+        parser.error("provide the target with --target/-t")
     if args.new_only and not args.baseline:
-        parser.error("--new-only exige --baseline")
+        parser.error("--new-only requires --baseline")
     if args.allow_active and not args.scope:
-        parser.error("--allow-active exige --scope: checks intrusivos só rodam contra alvos "
-                     "explicitamente listados no arquivo de escopo")
+        parser.error("--allow-active requires --scope: intrusive checks only run against targets "
+                     "explicitly listed in the scope file")
 
     scope = None
     if args.scope:
         try:
             scope = load_scope(args.scope)
         except ScopeError as e:
-            print(f"Erro: {e}", file=sys.stderr)
+            print(f"Error: {e}", file=sys.stderr)
             return 2
         host = extract_domain(target)
         if not scope.allows(host):
-            print(f"Erro: o alvo '{host}' está FORA do escopo definido em {args.scope}. "
-                  "Nenhuma requisição foi enviada.", file=sys.stderr)
+            print(f"Error: target '{host}' is OUT of the scope defined in {args.scope}. "
+                  "No request was sent.", file=sys.stderr)
             return 2
 
     fmt = _resolve_format(args)
     if fmt is None:
-        print("Erro: use uma extensão .json ou .html em --output (ou informe --format).",
+        print("Error: use a .json, .md, .sarif or .html extension on --output (or pass --format).",
               file=sys.stderr)
         return 2
 
@@ -159,28 +159,28 @@ def main(argv=None) -> int:
         valid = REGISTRY.names("web", include_active=True)
         invalid = [c for c in checks if c not in valid]
         if invalid:
-            print(f"Erro: checks inválidos: {', '.join(invalid)}. Válidos: {', '.join(valid)}",
+            print(f"Error: invalid checks: {', '.join(invalid)}. Valid: {', '.join(valid)}",
                   file=sys.stderr)
             return 2
         active = [c for c in checks if REGISTRY.get(c).active]
         if active and not args.allow_active:
-            print(f"Erro: os checks {', '.join(active)} são ativos/intrusivos e exigem --allow-active "
-                  "(use apenas com autorização expressa do dono do alvo).", file=sys.stderr)
+            print(f"Error: checks {', '.join(active)} are active/intrusive and require --allow-active "
+                  "(use only with explicit authorization from the target owner).", file=sys.stderr)
             return 2
 
     baseline = None
-    if args.baseline:  # valida antes de gastar um scan inteiro
+    if args.baseline:  # validate before spending a whole scan
         try:
             baseline = load_baseline(args.baseline)
         except BaselineError as e:
-            print(f"Erro: {e}", file=sys.stderr)
+            print(f"Error: {e}", file=sys.stderr)
             return 2
 
     console = progress_cb = None
     if args.rich:
         from . import ui
         if not ui.RICH_AVAILABLE:
-            print("Erro: --rich exige a biblioteca 'rich' (pip install rich).", file=sys.stderr)
+            print("Error: --rich requires the 'rich' library (pip install rich).", file=sys.stderr)
             return 2
         console = ui.make_console(no_color=args.no_color)
         ui.print_banner(console, target, args.mode)
@@ -192,7 +192,7 @@ def main(argv=None) -> int:
             verify=not args.insecure, allow_active=args.allow_active,
             scope=scope, ports=_parse_ports(args.ports) if args.ports else None)
     except ValueError as e:
-        print(f"Erro: {e}", file=sys.stderr)
+        print(f"Error: {e}", file=sys.stderr)
         return 2
 
     if console is not None:
@@ -228,12 +228,12 @@ def main(argv=None) -> int:
         if args.output:
             with open(args.output, "w", encoding="utf-8") as fh:
                 fh.write(report + "\n")
-            console.print(f"\n[dim]Relatório {fmt} salvo em {args.output}[/]")
+            console.print(f"\n[dim]{fmt} report saved to {args.output}[/]")
     elif args.output:
         with open(args.output, "w", encoding="utf-8") as fh:
             fh.write(report + "\n")
         print(text)
-        print(f"\nRelatório {fmt} salvo em {args.output}", file=sys.stderr)
+        print(f"\n{fmt} report saved to {args.output}", file=sys.stderr)
     else:
         print(report)
 

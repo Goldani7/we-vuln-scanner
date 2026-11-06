@@ -1,13 +1,13 @@
-"""Port scan TCP connect (check ATIVO: só roda com --allow-active e dentro do --scope).
+"""TCP-connect port scan (ACTIVE check: only runs with --allow-active and inside --scope).
 
-Método: connect() TCP simples numa lista curta de portas de serviços comuns, sem SYN scan, sem
-varredura completa de 65535 portas e sem enviar payload nenhum — no máximo lê (nunca escreve) os
-primeiros bytes que o próprio serviço envia primeiro (banner), como SSH, FTP e SMTP já fazem com
-qualquer cliente TCP. Nenhum dado é enviado aos serviços encontrados.
-Por quê: uma porta de banco de dados, RDP ou VNC alcançável diretamente da internet é, sozinha, um
-achado de alto risco — não é preciso explorar nada para isso importar.
-Limites por padrão: ~25 portas, taxa e concorrência controladas por --rate/--concurrency (como o
-resto do scan), timeout curto por porta. Use --ports para restringir ainda mais.
+Method: a simple TCP connect() across a short list of common service ports — no SYN scan, no full
+65535-port sweep, and no payload sent at all; at most it reads (never writes) the first bytes the
+service itself sends first (its banner), the same way SSH, FTP and SMTP already do with any TCP
+client. No data is ever sent to the services found.
+Why: a database, RDP or VNC port directly reachable from the internet is, on its own, a high-risk
+finding — nothing needs to be exploited for that to matter.
+Default limits: ~25 ports, rate and concurrency controlled by --rate/--concurrency (like the rest
+of the scan), a short per-port timeout. Use --ports to narrow it further.
 Ref.: CWE-668 (Exposure of Resource to Wrong Sphere); OWASP WSTG-INFO-02.
 """
 import asyncio
@@ -22,36 +22,36 @@ BANNER_MAX_BYTES = 160
 MAX_CONCURRENCY = 20
 DEFAULT_CONNECT_TIMEOUT = 2.5
 
-# Lista curta e intencional: serviços comuns cuja exposição direta já é relevante por si só.
-# (porta, descrição, severidade se encontrada aberta, razão)
+# Short, deliberate list: common services whose direct exposure already matters on its own.
+# (port, description, severity if found open, reason)
 PORT_TABLE = {
-    21: ("FTP", Severity.MEDIUM, "Transmite credenciais em texto claro."),
-    22: ("SSH", Severity.INFO, "Acesso remoto; normal se bem administrado (chaves, fail2ban)."),
-    23: ("Telnet", Severity.HIGH, "Protocolo sem criptografia; credenciais em texto claro."),
-    25: ("SMTP", Severity.INFO, "Servidor de e-mail; veja também o modo --mode email."),
-    53: ("DNS", Severity.INFO, "Servidor DNS; um resolver aberto pode ser abusado em ataques de amplificação."),
-    80: ("HTTP", Severity.INFO, "Esperado num servidor web."),
-    110: ("POP3", Severity.LOW, "Prefira POP3S (995) com TLS."),
-    111: ("RPCbind", Severity.MEDIUM, "Costuma expor outros serviços RPC internos."),
-    139: ("NetBIOS", Severity.MEDIUM, "Compartilhamento de arquivos legado, superfície de ataque conhecida."),
-    143: ("IMAP", Severity.LOW, "Prefira IMAPS (993) com TLS."),
-    389: ("LDAP", Severity.MEDIUM, "Diretório corporativo; confirme se precisa estar na internet."),
-    443: ("HTTPS", Severity.INFO, "Esperado num servidor web."),
-    445: ("SMB", Severity.HIGH, "Alvo histórico de worms e exploits de rede (ex.: EternalBlue)."),
-    1433: ("Microsoft SQL Server", Severity.HIGH, "Banco de dados alcançável diretamente da internet."),
-    1521: ("Oracle Database", Severity.HIGH, "Banco de dados alcançável diretamente da internet."),
-    2375: ("Docker (sem TLS)", Severity.CRITICAL, "API do Docker sem autenticação equivale a execução remota de comandos."),
-    3000: ("App genérica (dev)", Severity.LOW, "Porta comum de servidor de desenvolvimento; confirme se é produção."),
-    3306: ("MySQL/MariaDB", Severity.HIGH, "Banco de dados alcançável diretamente da internet."),
-    3389: ("RDP", Severity.MEDIUM, "Acesso remoto Windows; alvo comum de força bruta e exploits."),
-    5000: ("App genérica (dev)", Severity.LOW, "Porta comum de servidor de desenvolvimento; confirme se é produção."),
-    5432: ("PostgreSQL", Severity.HIGH, "Banco de dados alcançável diretamente da internet."),
-    5900: ("VNC", Severity.HIGH, "Acesso remoto frequentemente sem senha forte."),
-    6379: ("Redis", Severity.HIGH, "Frequentemente sem autenticação por padrão."),
-    8080: ("HTTP alternativo", Severity.INFO, "Comum em proxies/apps; confirme se deveria ser público."),
-    8443: ("HTTPS alternativo", Severity.INFO, "Comum em painéis administrativos; confirme se deveria ser público."),
-    9200: ("Elasticsearch", Severity.HIGH, "Frequentemente sem autenticação; expõe os dados indexados."),
-    27017: ("MongoDB", Severity.HIGH, "Frequentemente sem autenticação por padrão."),
+    21: ("FTP", Severity.MEDIUM, "Transmits credentials in plain text."),
+    22: ("SSH", Severity.INFO, "Remote access; normal if well administered (keys, fail2ban)."),
+    23: ("Telnet", Severity.HIGH, "Unencrypted protocol; credentials in plain text."),
+    25: ("SMTP", Severity.INFO, "Mail server; see also --mode email."),
+    53: ("DNS", Severity.INFO, "DNS server; an open resolver can be abused for amplification attacks."),
+    80: ("HTTP", Severity.INFO, "Expected on a web server."),
+    110: ("POP3", Severity.LOW, "Prefer POP3S (995) with TLS."),
+    111: ("RPCbind", Severity.MEDIUM, "Tends to expose other internal RPC services."),
+    139: ("NetBIOS", Severity.MEDIUM, "Legacy file sharing, a known attack surface."),
+    143: ("IMAP", Severity.LOW, "Prefer IMAPS (993) with TLS."),
+    389: ("LDAP", Severity.MEDIUM, "Corporate directory; confirm it needs to be on the internet."),
+    443: ("HTTPS", Severity.INFO, "Expected on a web server."),
+    445: ("SMB", Severity.HIGH, "Historical target of worms and network exploits (e.g. EternalBlue)."),
+    1433: ("Microsoft SQL Server", Severity.HIGH, "Database directly reachable from the internet."),
+    1521: ("Oracle Database", Severity.HIGH, "Database directly reachable from the internet."),
+    2375: ("Docker (no TLS)", Severity.CRITICAL, "An unauthenticated Docker API is equivalent to remote code execution."),
+    3000: ("Generic app (dev)", Severity.LOW, "Common development-server port; confirm it isn't production."),
+    3306: ("MySQL/MariaDB", Severity.HIGH, "Database directly reachable from the internet."),
+    3389: ("RDP", Severity.MEDIUM, "Windows remote access; a common target for brute force and exploits."),
+    5000: ("Generic app (dev)", Severity.LOW, "Common development-server port; confirm it isn't production."),
+    5432: ("PostgreSQL", Severity.HIGH, "Database directly reachable from the internet."),
+    5900: ("VNC", Severity.HIGH, "Remote access, often without a strong password."),
+    6379: ("Redis", Severity.HIGH, "Often unauthenticated by default."),
+    8080: ("Alternate HTTP", Severity.INFO, "Common on proxies/apps; confirm it should be public."),
+    8443: ("Alternate HTTPS", Severity.INFO, "Common on admin panels; confirm it should be public."),
+    9200: ("Elasticsearch", Severity.HIGH, "Often unauthenticated; exposes the indexed data."),
+    27017: ("MongoDB", Severity.HIGH, "Often unauthenticated by default."),
 }
 DEFAULT_PORTS = sorted(PORT_TABLE)
 REFERENCES = ["https://owasp.org/www-project-web-security-testing-guide/"]
@@ -63,7 +63,7 @@ def _clean_banner(raw: bytes) -> str:
 
 
 async def _probe_port(host: str, port: int, timeout: float) -> str:
-    """None se fechada/filtrada; string (banner, possivelmente vazia) se o connect() teve sucesso."""
+    """None if closed/filtered; a string (banner, possibly empty) if connect() succeeded."""
     try:
         reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=timeout)
     except (OSError, asyncio.TimeoutError):
@@ -79,7 +79,7 @@ async def _probe_port(host: str, port: int, timeout: float) -> str:
 
 
 async def scan_ports(host: str, ports, rate: float, concurrency: int, timeout: float) -> dict:
-    """{porta: banner} das portas abertas, respeitando rate/concorrência."""
+    """{port: banner} of the open ports, honoring rate/concurrency."""
     limiter = RateLimiter(rate)
     sem = asyncio.Semaphore(max(1, min(concurrency, MAX_CONCURRENCY)))
 
@@ -96,15 +96,15 @@ async def scan_ports(host: str, ports, rate: float, concurrency: int, timeout: f
 async def check_portscan(ctx) -> list:
     host = ctx.domain
     if not host:
-        return [Finding(CHECK, Severity.INFO, "Port scan não executado: alvo sem hostname resolvível",
+        return [Finding(CHECK, Severity.INFO, "Port scan not run: target has no resolvable hostname",
                         rule_id="portscan.skipped")]
-    # Defesa em profundidade: o cliente HTTP já impõe o --scope a cada requisição; aqui usamos
-    # sockets crus, então a checagem é repetida explicitamente antes de abrir qualquer conexão.
+    # Defense in depth: the HTTP client already enforces --scope on every request; this check
+    # uses raw sockets, so the check is repeated explicitly before opening any connection.
     scope = ctx.config.scope
     if scope is not None and not scope.allows(host):
         return [Finding(
-            CHECK, Severity.INFO, "Port scan bloqueado: alvo fora do escopo", f"host: {host}",
-            "Adicione o host ao arquivo de escopo para autorizar o port scan.",
+            CHECK, Severity.INFO, "Port scan blocked: target is out of scope", f"host: {host}",
+            "Add the host to the scope file to authorize the port scan.",
             rule_id="portscan.out_of_scope", confidence="high")]
 
     ports = getattr(ctx.config, "ports", None) or DEFAULT_PORTS
@@ -112,30 +112,30 @@ async def check_portscan(ctx) -> list:
     try:
         open_ports = await scan_ports(host, ports, ctx.config.rate, ctx.config.concurrency, timeout)
     except OSError as e:
-        return [Finding(CHECK, Severity.INFO, "Port scan falhou: não foi possível resolver/alcançar o host",
+        return [Finding(CHECK, Severity.INFO, "Port scan failed: could not resolve/reach the host",
                         f"{type(e).__name__}: {e}", rule_id="portscan.error")]
 
     if not open_ports:
         return [Finding(
-            CHECK, Severity.INFO, "Nenhuma porta comum aberta encontrada",
-            f"{len(ports)} portas testadas (TCP connect): {', '.join(map(str, ports))}.",
+            CHECK, Severity.INFO, "No common port found open",
+            f"{len(ports)} ports tested (TCP connect): {', '.join(map(str, ports))}.",
             rule_id="portscan.none")]
 
     findings = []
     for port, banner in sorted(open_ports.items()):
-        name, severity, reason = PORT_TABLE.get(port, ("desconhecido", Severity.INFO, ""))
-        evidence = f"{host}:{port}/tcp aberto (TCP connect bem-sucedido)"
+        name, severity, reason = PORT_TABLE.get(port, ("unknown", Severity.INFO, ""))
+        evidence = f"{host}:{port}/tcp open (TCP connect succeeded)"
         if banner:
             evidence += f"\nBanner: {banner}"
         findings.append(Finding(
-            CHECK, severity, f"Porta {port}/tcp aberta ({name})", reason, _remediation(port, name),
+            CHECK, severity, f"Port {port}/tcp open ({name})", reason, _remediation(port, name),
             {"port": port, "service": name, "banner": banner or None},
             evidence=evidence, cwe="CWE-668", references=REFERENCES,
             confidence="high" if banner else "medium", rule_id=f"portscan.port-{port}"))
 
     findings.append(Finding(
-        CHECK, Severity.INFO, f"{len(open_ports)} de {len(ports)} portas comuns abertas",
-        "Resumo da varredura TCP connect.",
+        CHECK, Severity.INFO, f"{len(open_ports)} of {len(ports)} common ports open",
+        "TCP-connect scan summary.",
         metadata={"open_ports": sorted(open_ports)},
         evidence=", ".join(f"{p}/tcp" for p in sorted(open_ports)),
         confidence="high", rule_id="portscan.summary"))
@@ -144,10 +144,10 @@ async def check_portscan(ctx) -> list:
 
 def _remediation(port: int, name: str) -> str:
     if port in (3306, 5432, 1433, 1521, 6379, 9200, 27017, 2375):
-        return (f"Restrinja {name} a uma rede interna/VPN ou a IPs específicos via firewall; "
-               "nunca exponha um banco de dados ou API de administração direto à internet.")
+        return (f"Restrict {name} to an internal network/VPN or to specific IPs via a firewall; "
+               "never expose a database or admin API directly to the internet.")
     if port in (23, 445, 139, 111):
-        return f"Desabilite {name} se não for necessário, ou restrinja o acesso por firewall/VPN."
+        return f"Disable {name} if not needed, or restrict access via firewall/VPN."
     if port in (3389, 5900):
-        return f"Restrinja {name} por VPN/IP e exija autenticação forte (MFA); evite expor diretamente à internet."
-    return f"Confirme se {name} precisa estar acessível publicamente; caso contrário, restrinja por firewall."
+        return f"Restrict {name} by VPN/IP and require strong authentication (MFA); avoid exposing it directly to the internet."
+    return f"Confirm whether {name} needs to be publicly reachable; otherwise restrict it via a firewall."

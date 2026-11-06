@@ -36,7 +36,7 @@ def test_discovery_sensitive_names_and_private_ips():
     handler = lambda req: httpx.Response(200, json=PAYLOAD)
     findings = _run(handler, {"www.ex.com": ["93.184.216.34"], "staging.ex.com": ["10.0.0.5"]})
     by = {f.rule: f for f in findings}
-    assert "3 subdomínios" in by["subdomains.discovered"].title
+    assert "3 subdomains" in by["subdomains.discovered"].title
     assert "staging.ex.com → 10.0.0.5" in by["subdomains.discovered"].evidence
     assert by["subdomains.sensitive-names"].severity is Severity.LOW
     assert by["subdomains.private-ip"].metadata["subdomains"] == {"staging.ex.com": ["10.0.0.5"]}

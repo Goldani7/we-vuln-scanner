@@ -9,7 +9,7 @@ from scanner.scope import parse_scope
 
 
 async def _tcp_echo_server(banner: bytes = b""):
-    """Servidor TCP de loopback real: aceita conexões e opcionalmente envia um banner."""
+    """Real loopback TCP server: accepts connections and optionally sends a banner."""
     async def handle(reader, writer):
         if banner:
             writer.write(banner)
@@ -41,7 +41,7 @@ def test_probe_open_port_with_banner():
 
 def test_probe_closed_port_returns_none():
     async def main():
-        # porta improvável de estar ouvindo
+        # a port unlikely to be listening
         return await _probe_port("127.0.0.1", 1, timeout=0.3)
     assert asyncio.run(main()) is None
 
@@ -66,7 +66,7 @@ def test_scan_ports_finds_only_the_open_one():
         finally:
             server.close()
     result = asyncio.run(main())
-    assert list(result) == [list(result)[0]]  # só a porta aberta
+    assert list(result) == [list(result)[0]]  # only the open port
 
 
 def test_check_portscan_end_to_end_classifies_by_table():
@@ -83,11 +83,11 @@ def test_check_portscan_end_to_end_classifies_by_table():
     by_rule = {f.rule: f for f in findings}
     assert any(r.startswith("portscan.port-") for r in by_rule)
     summary = by_rule["portscan.summary"]
-    assert summary.severity is Severity.INFO and "1 de 1" in summary.title
+    assert summary.severity is Severity.INFO and "1 of 1" in summary.title
 
 
 def test_check_portscan_no_open_ports():
-    cfg = ScanConfig(rate=0, retries=0, ports=[1])  # porta improvável
+    cfg = ScanConfig(rate=0, retries=0, ports=[1])  # unlikely port
     findings = run_check(cfg)
     assert findings == [f for f in findings if f.rule == "portscan.none"]
 
@@ -95,7 +95,7 @@ def test_check_portscan_no_open_ports():
 def test_check_portscan_respects_custom_port_list():
     cfg = ScanConfig(rate=0, retries=0, ports=[1, 2, 3])
     findings = run_check(cfg)
-    assert "3 portas testadas" in findings[0].detail
+    assert "3 ports tested" in findings[0].detail
 
 
 @pytest.mark.parametrize("port,expected_severity", [(23, Severity.HIGH), (6379, Severity.HIGH),

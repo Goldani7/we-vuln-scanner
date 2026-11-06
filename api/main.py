@@ -31,7 +31,7 @@ class ScanRequest(BaseModel):
         if v is not None:
             invalid = [c for c in v if c not in ALL_CHECKS]
             if invalid:
-                raise ValueError(f"Checks inválidos: {', '.join(invalid)}")
+                raise ValueError(f"Invalid checks: {', '.join(invalid)}")
         return v
 
 

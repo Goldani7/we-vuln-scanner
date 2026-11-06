@@ -80,7 +80,7 @@ def test_enrich_survives_one_source_failing():
     with patch("scanner.threatintel.requests.get", side_effect=fake_get):
         info, warnings = ti.enrich(["CVE-2021-1"])
     assert info["CVE-2021-1"]["epss"] == 0.7 and info["CVE-2021-1"]["kev"] is None
-    assert len(warnings) == 1 and warnings[0].startswith("CISA KEV indisponível")
+    assert len(warnings) == 1 and warnings[0].startswith("CISA KEV unavailable")
 
 
 def test_enrich_never_raises_when_everything_fails():
@@ -92,7 +92,7 @@ def test_enrich_never_raises_when_everything_fails():
 def test_malformed_payloads_are_errors_not_crashes():
     with patch("scanner.threatintel.requests.get", return_value=Resp({"unexpected": 1})):
         _, warnings = ti.enrich(["CVE-2021-1"])
-    assert len(warnings) == 1  # KEV malformado; EPSS sem 'data' é simplesmente vazio
+    assert len(warnings) == 1  # malformed KEV; EPSS with no 'data' is simply empty
 
 
 def test_disabled_by_env_makes_no_requests(monkeypatch):

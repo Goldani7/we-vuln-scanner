@@ -9,7 +9,7 @@ description = "Exemplo de plugin do web-vuln-scanner: respostas com cookies sem 
 requires-python = ">=3.10"
 dependencies = ["web-vuln-scanner"]
 
-# O grupo "wvs.checks" é como o scanner descobre plugins. O valor aponta para um CheckSpec.
+# The "wvs.checks" group is how the scanner discovers plugins. The value points to a CheckSpec.
 [project.entry-points."wvs.checks"]
 cache_control = "wvs_cache_control:SPEC"
 

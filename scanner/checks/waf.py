@@ -1,14 +1,15 @@
-"""Detecção PASSIVA de WAF/CDN/proxy reverso.
+"""PASSIVE WAF/CDN/reverse-proxy detection.
 
-Por quê: saber o que está na frente da aplicação muda a leitura de todo o resto do scan.
-- O header `Server` e as versões vistas pertencem à borda (CDN), não à origem: CVEs de
-  `tech_detection` podem não se aplicar ao backend.
-- Um WAF pode filtrar ou mascarar achados (arquivos sensíveis bloqueados não significam ausentes) e
-  bloquear o IP do scanner. O pentester precisa ajustar o ritmo ou combinar uma liberação do IP.
-- O IP de origem pode estar exposto fora da CDN (DNS histórico, subdomínios), ampliando o escopo.
-Método: só analisa a resposta que o scan já obteve (headers, cookies e, em respostas de erro, o corpo).
-Não envia payloads de ataque para "provocar" o WAF, o que seria um módulo ativo.
-Ref.: técnica de fingerprinting usada pelo wafw00f; OWASP WSTG-INFO-02.
+Why: knowing what's in front of the application changes how the rest of the scan reads.
+- The `Server` header and the versions seen belong to the edge (CDN), not the origin: CVEs from
+  `tech_detection` may not apply to the backend.
+- A WAF can filter or mask findings (blocked sensitive files don't mean absent) and block the
+  scanner's IP. The pentester needs to adjust the pace or arrange an IP allowlist.
+- The origin IP may be exposed outside the CDN (historical DNS, subdomains), widening the scope.
+Method: only analyzes the response the scan already fetched (headers, cookies and, on error
+responses, the body). It never sends attack payloads to "provoke" the WAF — that would be an
+active module.
+Ref.: fingerprinting technique used by wafw00f; OWASP WSTG-INFO-02.
 """
 import re
 from dataclasses import dataclass
@@ -23,10 +24,10 @@ BLOCK_STATUSES = {403, 406, 429, 503}
 @dataclass(frozen=True)
 class Signature:
     name: str
-    kinds: tuple                # subconjunto de ("waf", "cdn", "lb")
-    headers: tuple = ()         # (nome do header, regex do valor ou None para "apenas presença")
-    cookies: tuple = ()         # regex sobre o NOME do cookie
-    body: str = ""              # regex da página de bloqueio (só em respostas 4xx/5xx)
+    kinds: tuple                # subset of ("waf", "cdn", "lb")
+    headers: tuple = ()         # (header name, value regex, or None for "presence only")
+    cookies: tuple = ()         # regex over the cookie NAME
+    body: str = ""              # block-page regex (only on 4xx/5xx responses)
 
 
 SIGNATURES = [
@@ -84,7 +85,7 @@ SIGNATURES = [
     Signature("KeyCDN", ("cdn",), headers=(("server", r"keycdn"),)),
 ]
 
-KIND_LABEL = {"waf": "WAF", "cdn": "CDN", "lb": "balanceador"}
+KIND_LABEL = {"waf": "WAF", "cdn": "CDN", "lb": "load balancer"}
 
 
 def _cookie_names(headers) -> list:
@@ -94,23 +95,23 @@ def _cookie_names(headers) -> list:
 
 
 def match_signature(sig: Signature, headers, cookie_names, body: str) -> list:
-    """Indicadores (strings legíveis) que casaram com a assinatura."""
+    """Human-readable indicator strings that matched the signature."""
     hits = []
     for name, pattern in sig.headers:
         value = headers.get(name)
         if value is not None and (pattern is None or re.search(pattern, value, re.I)):
-            hits.append(f"header {name}: {value[:80]}" if pattern else f"header {name} presente")
+            hits.append(f"header {name}: {value[:80]}" if pattern else f"header {name} present")
     for pattern in sig.cookies:
         for cookie in cookie_names:
             if re.search(pattern, cookie):
                 hits.append(f"cookie {cookie}")
     if sig.body and body and re.search(sig.body, body, re.I | re.S):
-        hits.append("página de bloqueio característica no corpo da resposta")
+        hits.append("characteristic block page in the response body")
     return hits
 
 
 def detect(response) -> list:
-    """[(Signature, indicadores)] para cada WAF/CDN identificado na resposta."""
+    """[(Signature, indicators)] for each WAF/CDN identified in the response."""
     cookie_names = _cookie_names(response.headers)
     body = ""
     if response.status_code in BLOCK_STATUSES or response.status_code >= 400:
@@ -127,27 +128,27 @@ def check_waf(response) -> list:
     found = detect(response)
     if not found:
         return [Finding(
-            CHECK, Severity.INFO, "Nenhum WAF/CDN identificado passivamente",
-            "Nenhuma assinatura conhecida nos headers, cookies ou corpo da resposta. Isso não prova "
-            "ausência: muitos WAFs só se revelam ao bloquear uma requisição maliciosa, o que este "
-            "scan passivo não provoca.", rule_id="waf.none", confidence="low")]
+            CHECK, Severity.INFO, "No WAF/CDN identified passively",
+            "No known signature in the headers, cookies, or response body. This doesn't prove "
+            "absence: many WAFs only reveal themselves by blocking a malicious request, which this "
+            "passive scan never provokes.", rule_id="waf.none", confidence="low")]
 
     findings = []
     blocked = response.status_code in BLOCK_STATUSES
     for sig, hits in found:
         kinds = "/".join(KIND_LABEL[k] for k in sig.kinds)
-        block_page = any(h.startswith("página de bloqueio") for h in hits)
+        block_page = any(h.startswith("characteristic block page") for h in hits)
         confidence = "high" if len(hits) >= 2 or block_page else "medium"
         edge = ("cdn" in sig.kinds) or ("lb" in sig.kinds)
-        detail = (f"A aplicação está atrás de {sig.name} ({kinds}). " + (
-            "O header Server e as versões observadas pertencem à borda, não à origem: CVEs de "
-            "tech_detection podem não se aplicar ao backend. " if edge else "") +
-            "Resultados de arquivos expostos podem estar filtrados pelo WAF.")
+        detail = (f"The application sits behind {sig.name} ({kinds}). " + (
+            "The Server header and the versions observed belong to the edge, not the origin: "
+            "tech_detection CVEs may not apply to the backend. " if edge else "") +
+            "exposed_files results may be filtered by the WAF.")
         findings.append(Finding(
-            CHECK, Severity.INFO, f"{sig.name} detectado ({kinds})", detail,
-            "Ajuste --rate/--concurrency para não ser bloqueado e combine com o cliente a liberação do "
-            "IP de teste. Verifique se o IP de origem está acessível fora da CDN (registros DNS "
-            "históricos, subdomínios, e-mail), pois isso contorna a proteção.",
+            CHECK, Severity.INFO, f"{sig.name} detected ({kinds})", detail,
+            "Adjust --rate/--concurrency to avoid being blocked, and arrange an IP allowlist with "
+            "the client. Check whether the origin IP is reachable outside the CDN (historical DNS "
+            "records, subdomains, email), since that bypasses the protection.",
             {"vendor": sig.name, "kinds": list(sig.kinds), "indicators": hits},
             evidence="\n".join(hits), cwe="CWE-200", confidence=confidence,
             rule_id=f"waf.detected.{re.sub(r'[^a-z0-9]+', '-', sig.name.lower()).strip('-')}"))
@@ -156,11 +157,11 @@ def check_waf(response) -> list:
 
     if blocked:
         findings.append(Finding(
-            CHECK, Severity.INFO, "A página inicial retornou uma resposta de bloqueio",
-            f"HTTP {response.status_code} com assinatura de WAF/CDN: o scan provavelmente está sendo "
-            "bloqueado e os demais resultados podem ser enganosos (falsos negativos).",
-            "Peça a liberação do IP do scanner, reduza --rate e --concurrency, ou identifique o "
-            "engajamento com --user-agent / -H conforme combinado com o cliente.",
+            CHECK, Severity.INFO, "The homepage returned a blocked response",
+            f"HTTP {response.status_code} with a WAF/CDN signature: the scan is likely being "
+            "blocked, and the remaining results may be misleading (false negatives).",
+            "Ask for the scanner's IP to be allowlisted, lower --rate and --concurrency, or "
+            "identify the engagement with --user-agent / -H as agreed with the client.",
             {"status": response.status_code}, evidence=f"GET → HTTP {response.status_code}",
             confidence="high", rule_id="waf.blocked"))
     return findings

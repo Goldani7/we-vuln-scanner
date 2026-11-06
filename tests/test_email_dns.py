@@ -17,7 +17,7 @@ class MX:
 
 
 class FakeResolver:
-    """Resolver falso: `zone` mapeia (nome, tipo) -> lista de rdata; o resto é NXDOMAIN."""
+    """Fake resolver: `zone` maps (name, type) -> list of rdata; everything else is NXDOMAIN."""
 
     def __init__(self, zone=None, fail=()):
         self.zone = zone or {}
@@ -42,7 +42,7 @@ def _sev(findings, title_part):
 # SPF
 def test_spf_missing_is_high():
     f = check_spf("ex.com", resolver=FakeResolver())
-    assert f[0].severity is Severity.HIGH and "ausente" in f[0].title
+    assert f[0].severity is Severity.HIGH and "Missing" in f[0].title
 
 
 def test_spf_hard_fail_is_ok():
@@ -54,8 +54,8 @@ def test_spf_hard_fail_is_ok():
     ("v=spf1 ip4:1.2.3.4 ~all", "~all", Severity.LOW),
     ("v=spf1 ip4:1.2.3.4 ?all", "?all", Severity.MEDIUM),
     ("v=spf1 +all", "+all", Severity.HIGH),
-    ("v=spf1 ip4:1.2.3.4", "sem mecanismo", Severity.MEDIUM),
-    ("v=spf1 bogus-term -all", "Sintaxe", Severity.MEDIUM),
+    ("v=spf1 ip4:1.2.3.4", "no final", Severity.MEDIUM),
+    ("v=spf1 bogus-term -all", "Suspicious SPF", Severity.MEDIUM),
 ])
 def test_spf_policies(record, title, sev):
     assert _sev(check_spf("ex.com", resolver=_spf(record)), title) is sev
@@ -68,12 +68,12 @@ def test_spf_multiple_records_is_high():
 
 def test_spf_too_many_lookups():
     record = "v=spf1 " + " ".join(f"include:s{i}.com" for i in range(11)) + " -all"
-    assert _sev(check_spf("ex.com", resolver=_spf(record)), "10 consultas") is Severity.MEDIUM
+    assert _sev(check_spf("ex.com", resolver=_spf(record)), "10 DNS lookup") is Severity.MEDIUM
 
 
 def test_spf_dns_timeout_does_not_crash():
     f = check_spf("ex.com", resolver=FakeResolver(fail=["ex.com"]))
-    assert f[0].severity is Severity.INFO and "falhou" in f[0].title
+    assert f[0].severity is Severity.INFO and "failed" in f[0].title
 
 
 # DMARC
@@ -90,13 +90,13 @@ def test_dmarc_missing_is_high():
 ])
 def test_dmarc_policy_severity(policy, sev):
     f = check_dmarc("ex.com", resolver=_dmarc(f"v=DMARC1; p={policy}; rua=mailto:d@ex.com"))
-    assert _sev(f, "Política DMARC") is sev
+    assert _sev(f, "DMARC policy") is sev
 
 
 def test_dmarc_invalid_policy_and_no_rua():
     f = check_dmarc("ex.com", resolver=_dmarc("v=DMARC1; p=banana"))
-    assert _sev(f, "inválida") is Severity.MEDIUM
-    assert _sev(f, "rua") is Severity.LOW
+    assert _sev(f, "Invalid or missing") is Severity.MEDIUM
+    assert _sev(f, "report address") is Severity.LOW
 
 
 def test_dmarc_partial_pct():
@@ -113,7 +113,7 @@ def test_dkim_found():
 
 def test_dkim_revoked_key():
     r = FakeResolver({("default._domainkey.ex.com", "TXT"): [TXT("v=DKIM1; p=")]})
-    assert _sev(check_dkim("ex.com", resolver=r), "revogada") is Severity.LOW
+    assert _sev(check_dkim("ex.com", resolver=r), "Revoked") is Severity.LOW
 
 
 def test_dkim_wildcard_null_record_is_single_info():
@@ -124,13 +124,13 @@ def test_dkim_wildcard_null_record_is_single_info():
 
 def test_dkim_not_found_is_inconclusive_low():
     f = check_dkim("ex.com", resolver=FakeResolver())
-    assert f[0].severity is Severity.LOW and "não é conclusivo" in f[0].detail
+    assert f[0].severity is Severity.LOW and "not conclusive" in f[0].detail
 
 
 def test_dkim_all_queries_failing_reports_dns_failure():
     names = [f"{s}._domainkey.ex.com" for s in ("a", "b")]
     f = check_dkim("ex.com", resolver=FakeResolver(fail=names), selectors=["a", "b"])
-    assert f[0].severity is Severity.INFO and "falhou" in f[0].title
+    assert f[0].severity is Severity.INFO and "failed" in f[0].title
 
 
 # DNSBL
@@ -162,4 +162,4 @@ def test_dnsbl_spamhaus_refusal_is_not_a_listing():
     r.zone[("4.3.2.1.zen.spamhaus.org", "A")] = ["127.255.255.254"]
     f = check_dnsbl("ex.com", resolver=r)
     assert not any(x.severity is Severity.HIGH for x in f)
-    assert any("falharam" in x.title for x in f)
+    assert any("failed" in x.title for x in f)

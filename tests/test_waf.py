@@ -20,7 +20,7 @@ def test_cloudflare_by_headers_and_cookie_is_high_confidence():
     f = check_waf(r)[0]
     assert vendors([f]) == ["Cloudflare"] and f.confidence == "high" and f.severity is Severity.INFO
     assert "header cf-ray" in f.evidence and "cookie __cf_bm" in f.evidence
-    assert "borda" in f.detail  # avisa que Server/versões são da CDN, não da origem
+    assert "edge" in f.detail  # warns that Server/versions belong to the CDN, not the origin
 
 
 def test_single_weak_indicator_is_medium_confidence():
@@ -53,14 +53,14 @@ def test_multiple_layers_are_all_reported():
 
 def test_no_waf_is_low_confidence_info_and_admits_limits():
     f = check_waf(make_response({"server": "nginx"}))[0]
-    assert f.rule == "waf.none" and f.confidence == "low" and "não prova" in f.detail
+    assert f.rule == "waf.none" and f.confidence == "low" and "doesn't prove" in f.detail
 
 
 def test_block_page_is_detected_only_on_error_responses():
     body = "<title>Attention Required! | Cloudflare</title>"
     blocked = check_waf(make_response(status=403, body=body))
     assert {"waf.blocked"} <= {f.rule for f in blocked} and vendors(blocked) == ["Cloudflare"]
-    assert detect(make_response(status=200, body=body)) == []  # 200 com esse texto não é bloqueio
+    assert detect(make_response(status=200, body=body)) == []  # 200 with this text is not a block
 
 
 def test_blocked_status_with_vendor_headers_adds_blocked_notice():
@@ -81,8 +81,8 @@ def test_signature_table_is_well_formed():
 
 def test_forbidden_ratio_heuristic():
     assert _looks_blocked({"forbidden": 20, "requests": 30})
-    assert not _looks_blocked({"forbidden": 20, "requests": 100})  # 403 em arquivos protegidos é normal
-    assert not _looks_blocked({"forbidden": 5, "requests": 6})  # poucas amostras
+    assert not _looks_blocked({"forbidden": 20, "requests": 100})  # 403 on protected files is normal
+    assert not _looks_blocked({"forbidden": 5, "requests": 6})  # too few samples
 
 
 def test_scan_warns_when_target_forbids_most_requests():

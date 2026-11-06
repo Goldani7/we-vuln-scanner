@@ -42,32 +42,32 @@ def test_invalid_mode_choice_falls_back_to_full():
 
 
 def test_active_checks_require_a_scope_path_or_they_stay_off():
-    answers = gather_inputs(console(), feed("ex.com", "1", "s", "", "1"))
+    answers = gather_inputs(console(), feed("ex.com", "1", "y", "", "1"))
     assert answers["allow_active"] is False and answers["scope"] == ""
 
 
 def test_active_checks_enabled_with_scope_path():
-    answers = gather_inputs(console(), feed("ex.com", "1", "s", "escopo.txt", "1"))
-    assert answers["allow_active"] is True and answers["scope"] == "escopo.txt"
+    answers = gather_inputs(console(), feed("ex.com", "1", "y", "scope.txt", "1"))
+    assert answers["allow_active"] is True and answers["scope"] == "scope.txt"
     argv = build_argv(answers)
-    assert "--scope" in argv and "escopo.txt" in argv and "--allow-active" in argv
+    assert "--scope" in argv and "scope.txt" in argv and "--allow-active" in argv
 
 
-@pytest.mark.parametrize("sim_word", ["s", "S", "sim", "y", "yes"])
-def test_active_accepts_several_affirmative_spellings(sim_word):
-    answers = gather_inputs(console(), feed("ex.com", "1", sim_word, "escopo.txt", "1"))
+@pytest.mark.parametrize("word", ["y", "Y", "yes", "YES"])
+def test_active_accepts_several_affirmative_spellings(word):
+    answers = gather_inputs(console(), feed("ex.com", "1", word, "scope.txt", "1"))
     assert answers["allow_active"] is True
 
 
 def test_output_format_asks_for_a_filename_with_matching_default_extension():
     answers = gather_inputs(console(), feed("ex.com", "1", "n", "3", ""))
-    assert answers["output"] == "relatorio.json"
+    assert answers["output"] == "report.json"
 
 
 def test_output_format_accepts_custom_filename():
-    answers = gather_inputs(console(), feed("ex.com", "1", "n", "2", "meu.md"))
-    assert answers["output"] == "meu.md"
-    assert build_argv(answers)[-2:] == ["-o", "meu.md"]
+    answers = gather_inputs(console(), feed("ex.com", "1", "n", "2", "my.md"))
+    assert answers["output"] == "my.md"
+    assert build_argv(answers)[-2:] == ["-o", "my.md"]
 
 
 def test_no_output_file_means_no_dash_o_in_argv():

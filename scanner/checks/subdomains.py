@@ -1,9 +1,9 @@
-"""Enumeração PASSIVA de subdomínios via Certificate Transparency (crt.sh).
+"""PASSIVE subdomain enumeration via Certificate Transparency (crt.sh).
 
-Por quê: a superfície de ataque real de uma organização raramente é o domínio principal; staging,
-admin, VPN e serviços esquecidos aparecem em certificados públicos. A consulta vai à crt.sh (não ao
-alvo), então não há brute-force nem tráfego contra o domínio além de resolver os nomes via DNS.
-Exemplo: "staging-api.empresa.com" aparece num certificado e roda uma versão antiga sem autenticação.
+Why: an organization's real attack surface is rarely the main domain; staging, admin, VPN and
+forgotten services show up in public certificates. The query goes to crt.sh (not to the target),
+so there's no brute-force and no traffic against the domain beyond resolving the names via DNS.
+Example: "staging-api.company.com" shows up in a certificate and runs an old, unauthenticated version.
 Ref.: RFC 6962 (Certificate Transparency); OWASP WSTG-INFO-04.
 """
 import asyncio
@@ -25,7 +25,7 @@ SENSITIVE_NAME = re.compile(
 
 
 def parse_crtsh(payload, domain: str) -> list:
-    """Nomes únicos sob `domain` extraídos do JSON da crt.sh (wildcards normalizados)."""
+    """Unique names under `domain` extracted from crt.sh's JSON (wildcards normalized)."""
     names = set()
     for entry in payload if isinstance(payload, list) else []:
         for raw in str(entry.get("name_value", "")).splitlines():
@@ -62,8 +62,8 @@ def _is_ip_or_local(host: str) -> bool:
 async def check_subdomains(ctx) -> list:
     domain = ctx.domain
     if _is_ip_or_local(domain):
-        return [Finding(CHECK, Severity.INFO, "Enumeração de subdomínios ignorada",
-                        f"'{domain}' é um IP ou nome local, sem Certificate Transparency.",
+        return [Finding(CHECK, Severity.INFO, "Subdomain enumeration skipped",
+                        f"'{domain}' is an IP or a local name, with no Certificate Transparency.",
                         rule_id="subdomains.skipped")]
     try:
         r = await ctx.client.request("GET", CRT_URL.format(domain=domain), timeout=30,
@@ -74,27 +74,27 @@ async def check_subdomains(ctx) -> list:
     if payload is None:
         reason = r.describe() if isinstance(r, RequestFailed) else (
             f"HTTP {r.status_code}" if hasattr(r, "status_code") else str(r))
-        return [Finding(CHECK, Severity.INFO, "crt.sh indisponível; subdomínios não enumerados",
-                        f"Não foi possível consultar a crt.sh ({reason}). O serviço é conhecido por "
-                        "instabilidade.", "Execute novamente mais tarde.", rule_id="subdomains.unavailable")]
+        return [Finding(CHECK, Severity.INFO, "crt.sh unavailable; subdomains not enumerated",
+                        f"Could not query crt.sh ({reason}). The service is known to be "
+                        "unstable.", "Try again later.", rule_id="subdomains.unavailable")]
 
     names = parse_crtsh(payload, domain)
     if not names:
-        return [Finding(CHECK, Severity.INFO, "Nenhum subdomínio em Certificate Transparency",
-                        f"A crt.sh não retornou certificados para subdomínios de {domain}.",
+        return [Finding(CHECK, Severity.INFO, "No subdomains in Certificate Transparency",
+                        f"crt.sh returned no certificates for subdomains of {domain}.",
                         rule_id="subdomains.none")]
 
     resolved = await resolve_many(names[:MAX_RESOLVE])
     live = {n: ips for n, ips in resolved.items() if ips}
-    capped = f" (resolução limitada aos primeiros {MAX_RESOLVE})" if len(names) > MAX_RESOLVE else ""
-    evidence = "\n".join(f"{n} → {', '.join(live[n])}" if n in live else f"{n} (não resolve)"
+    capped = f" (resolution limited to the first {MAX_RESOLVE})" if len(names) > MAX_RESOLVE else ""
+    evidence = "\n".join(f"{n} → {', '.join(live[n])}" if n in live else f"{n} (does not resolve)"
                          for n in names[:40])
     if len(names) > 40:
         evidence += f"\n… (+{len(names) - 40})"
     findings = [Finding(
-        CHECK, Severity.INFO, f"{len(names)} subdomínios descobertos via Certificate Transparency",
-        f"{len(live)} resolvem em DNS{capped}. Cada um é superfície de ataque a revisar.",
-        "Inventarie estes hosts, desative os que não são mais usados e revise o escopo do pentest.",
+        CHECK, Severity.INFO, f"{len(names)} subdomains discovered via Certificate Transparency",
+        f"{len(live)} resolve in DNS{capped}. Each one is attack surface worth reviewing.",
+        "Inventory these hosts, decommission the ones no longer in use, and review the pentest scope.",
         {"subdomains": [{"name": n, "ips": resolved.get(n, [])} for n in names]},
         evidence=evidence, cwe="CWE-200", references=["https://crt.sh/"], confidence="high",
         rule_id="subdomains.discovered")]
@@ -102,9 +102,10 @@ async def check_subdomains(ctx) -> list:
     sensitive = [n for n in live if SENSITIVE_NAME.search(n[: -len(domain) - 1])]
     if sensitive:
         findings.append(Finding(
-            CHECK, Severity.LOW, f"{len(sensitive)} subdomínios de ambiente interno/não produtivo expostos",
-            "Nomes como dev/staging/admin/vpn costumam ter menos hardening e dados reais.",
-            "Restrinja por VPN/IP, exija autenticação e remova DNS/certificados de ambientes desativados.",
+            CHECK, Severity.LOW, f"{len(sensitive)} internal/non-production subdomain(s) exposed",
+            "Names like dev/staging/admin/vpn tend to have less hardening and real data.",
+            "Restrict them by VPN/IP, require authentication, and remove DNS/certificates for "
+            "decommissioned environments.",
             {"subdomains": sensitive}, evidence="\n".join(f"{n} → {', '.join(live[n])}" for n in sensitive[:20]),
             cwe="CWE-668", confidence="medium", rule_id="subdomains.sensitive-names"))
 
@@ -113,9 +114,9 @@ async def check_subdomains(ctx) -> list:
     private = {n: ips for n, ips in private.items() if ips}
     if private:
         findings.append(Finding(
-            CHECK, Severity.LOW, f"{len(private)} subdomínios públicos apontam para IPs privados",
-            "O DNS público revela a topologia interna (RFC 1918) e pode ser usado em ataques de DNS rebinding.",
-            "Mova registros internos para DNS interno (split-horizon).",
+            CHECK, Severity.LOW, f"{len(private)} public subdomain(s) point to private IPs",
+            "Public DNS reveals the internal topology (RFC 1918) and can be used in DNS rebinding attacks.",
+            "Move internal records to internal DNS (split-horizon).",
             {"subdomains": private}, evidence="\n".join(f"{n} → {', '.join(ips)}" for n, ips in list(private.items())[:20]),
             cwe="CWE-200", confidence="high", rule_id="subdomains.private-ip"))
     return findings

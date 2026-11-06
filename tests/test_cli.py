@@ -114,7 +114,7 @@ def test_fail_on_threshold(fail_on, sev, code):
     assert run(["-t", "ex.com", "--fail-on", fail_on], [Finding("x", sev, "t")])[0] == code
 
 
-@pytest.mark.parametrize("name,marker", [("r.md", "# Relatório"), ("r.sarif", '"version": "2.1.0"')])
+@pytest.mark.parametrize("name,marker", [("r.md", "# Security Report"), ("r.sarif", '"version": "2.1.0"')])
 def test_output_md_and_sarif_by_extension(tmp_path, name, marker):
     out = tmp_path / name
     run(["-t", "ex.com", "-o", str(out)], HIGH)
@@ -124,7 +124,7 @@ def test_output_md_and_sarif_by_extension(tmp_path, name, marker):
 def test_list_checks_needs_no_target_and_shows_plugin_source(capsys):
     assert main(["--list-checks"]) == 0
     out = capsys.readouterr().out
-    assert "exposed_files" in out and "builtin" in out and "ORIGEM" in out
+    assert "exposed_files" in out and "builtin" in out and "SOURCE" in out
 
 
 def test_active_checks_require_allow_active(capsys, tmp_path):
@@ -158,10 +158,10 @@ def test_rich_flag_still_writes_requested_output_file(tmp_path):
 
 
 def test_rich_without_library_fails_cleanly(monkeypatch, capsys):
-    # Simula a ausência do pacote diretamente na flag que scanner.cli checa, em vez de bloquear
-    # o sistema de import: imports relativos internos do próprio `rich` (ex.: `from .console import
-    # X` dentro de rich/protocol.py) não carregam o nome "rich" no __import__ e escapariam de um
-    # bloqueio por nome, tornando esse tipo de simulação frágil e dependente de versão da lib.
+    # Simulates the package's absence directly on the flag scanner.cli checks, instead of blocking
+    # the import system: rich's own internal relative imports (e.g. `from .console import X` inside
+    # rich/protocol.py) don't carry the name "rich" through __import__ and would slip past a
+    # name-based block, making that kind of simulation fragile and version-dependent.
     from scanner import ui
     monkeypatch.setattr(ui, "RICH_AVAILABLE", False)
     code, m = run(["-t", "ex.com", "--rich"])

@@ -1,14 +1,14 @@
-"""Sondagem ATIVA de WAF (check ativo: só roda com --allow-active e dentro do --scope).
+"""ACTIVE WAF probe (active check: only runs with --allow-active and inside --scope).
 
-Método: além da baseline (GET normal, já buscada pelo scan), envia UMA requisição extra com um
-parâmetro de consulta contendo um padrão genérico e bem conhecido de teste de WAF (estilo de
-path traversal), usado por ferramentas de fingerprinting como o wafw00f. Não é um payload
-funcional: é só uma string "suspeita" para ver se o WAF reage, e vai num parâmetro (`wvs_probe`)
-que a aplicação não deveria processar. Nenhum dado é alterado, nenhuma exploração é tentada.
-Por quê: muitos WAFs só se revelam ao bloquear algo. A detecção passiva (`waf.py`) não pega esses
-casos; esta sondagem confirma a presença ativa e, quando bloqueia, tenta identificar o fornecedor
-pela mesma tabela de assinaturas do módulo passivo.
-Ref.: técnica usada pelo wafw00f; OWASP WSTG-INFO-02.
+Method: besides the baseline (a normal GET, already fetched by the scan), sends ONE extra
+request with a query parameter holding a generic, well-known WAF test pattern (path-traversal
+style), used by fingerprinting tools like wafw00f. It's not a functional payload: it's just a
+"suspicious" string to see whether the WAF reacts, sent in a parameter (`wvs_probe`) the
+application shouldn't process. No data is changed, no exploitation is attempted.
+Why: many WAFs only reveal themselves by blocking something. Passive detection (`waf.py`) misses
+those cases; this probe confirms active presence and, when it gets blocked, tries to identify
+the vendor using the same signature table as the passive module.
+Ref.: technique used by wafw00f; OWASP WSTG-INFO-02.
 """
 from urllib.parse import urlsplit, urlunsplit
 
@@ -36,38 +36,38 @@ async def check_waf_active(ctx) -> list:
     try:
         baseline = await ctx.index()
     except RequestFailed as e:
-        return [Finding(CHECK, Severity.INFO, "Sondagem ativa de WAF não executada: baseline indisponível",
+        return [Finding(CHECK, Severity.INFO, "Active WAF probe not run: baseline unavailable",
                         e.describe(), rule_id="waf_active.no-baseline")]
 
     if baseline.status_code in BLOCK_STATUSES:
         return [Finding(
-            CHECK, Severity.INFO, "Sondagem ativa de WAF não é conclusiva",
-            f"A própria resposta de baseline já veio bloqueada (HTTP {baseline.status_code}); "
-            "não é possível diferenciar o bloqueio normal do provocado pela sondagem.",
+            CHECK, Severity.INFO, "Active WAF probe is not conclusive",
+            f"The baseline response itself already came back blocked (HTTP {baseline.status_code}); "
+            "there's no way to tell normal blocking apart from the one the probe caused.",
             rule_id="waf_active.inconclusive")]
 
     try:
         probe = await ctx.client.request("GET", _probe_url(ctx.url), follow_redirects=True)
     except RequestFailed as e:
-        return [Finding(CHECK, Severity.INFO, "Sondagem ativa de WAF falhou", e.describe(),
+        return [Finding(CHECK, Severity.INFO, "Active WAF probe failed", e.describe(),
                         rule_id="waf_active.error")]
 
     evidence = (f"Baseline: GET {ctx.url} → HTTP {baseline.status_code}\n"
-               f"Sonda: GET {ctx.url}?{PROBE_PARAM}=<path traversal> → HTTP {probe.status_code}")
+               f"Probe: GET {ctx.url}?{PROBE_PARAM}=<path traversal> → HTTP {probe.status_code}")
     if probe.status_code not in BLOCK_STATUSES:
         return [Finding(
-            CHECK, Severity.INFO, "Sondagem ativa não observou bloqueio", evidence,
-            "Isto não prova a ausência de WAF: ele pode não reagir a este padrão específico, ou "
-            "atuar apenas sobre outras classes de ataque.",
+            CHECK, Severity.INFO, "Active probe observed no blocking", evidence,
+            "This doesn't prove the absence of a WAF: it may not react to this specific pattern, "
+            "or may only act on other attack classes.",
             rule_id="waf_active.no-block", confidence="low")]
 
     vendors = _vendor_names(probe)
-    detail = ("O servidor bloqueou uma requisição com um padrão suspeito (path traversal) mas não "
-             "a requisição normal, confirmando um WAF ativo." +
-             (f" Fornecedor identificado pela resposta de bloqueio: {', '.join(vendors)}." if vendors else ""))
+    detail = ("The server blocked a request with a suspicious pattern (path traversal) but not "
+             "the normal request, confirming an active WAF." +
+             (f" Vendor identified from the block response: {', '.join(vendors)}." if vendors else ""))
     return [Finding(
-        CHECK, Severity.INFO, f"WAF ativo confirmado{' (' + vendors[0] + ')' if vendors else ''}",
-        detail, "Nenhuma ação necessária: isto é uma confirmação, não uma vulnerabilidade. Resultados "
-        "de outros checks podem estar sendo filtrados pelo WAF.",
+        CHECK, Severity.INFO, f"Active WAF confirmed{' (' + vendors[0] + ')' if vendors else ''}",
+        detail, "No action needed: this is a confirmation, not a vulnerability. Other checks' "
+        "results may be filtered by the WAF.",
         {"vendors": vendors, "probe_status": probe.status_code, "baseline_status": baseline.status_code},
         evidence=evidence, references=[REFERENCE], confidence="high", rule_id="waf_active.confirmed")]

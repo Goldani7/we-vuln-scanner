@@ -6,10 +6,10 @@ from scanner.report import summary, to_html, to_json, to_markdown, to_sarif, to_
 
 def _findings():
     return [
-        Finding("headers", Severity.HIGH, "CSP ausente", "detalhe", "corrija",
+        Finding("headers", Severity.HIGH, "CSP missing", "detail", "fix it",
                 evidence="Content-Security-Policy: ausente", cwe="CWE-693",
                 references=["https://owasp.org/x"], rule_id="headers.csp-missing", target="https://ex.com/"),
-        Finding("exposed_files", Severity.CRITICAL, ".env exposto", remediation="remova",
+        Finding("exposed_files", Severity.CRITICAL, ".env exposed", remediation="remove it",
                 evidence="DB_PASSWORD=****", rule_id="exposed.env", target="https://ex.com/"),
         Finding("tls", Severity.INFO, "TLS 1.3"),
     ]
@@ -36,15 +36,15 @@ def test_fingerprint_is_stable_and_target_specific():
 
 def test_text_shows_evidence_and_fix():
     out = to_text(_findings())
-    assert "[CRÍTICO]" in out and "Evidência: DB_PASSWORD=****" in out and "Correção: remova" in out
+    assert "[CRITICAL]" in out and "Evidence: DB_PASSWORD=****" in out and "Fix: remove it" in out
 
 
 def test_markdown_structure():
     md = to_markdown(_findings(), {"target": "https://ex.com", "mode": "web"})
-    assert md.startswith("# Relatório de segurança")
-    assert "| CRÍTICO | 1 |" in md and "### 1. [CRÍTICO] .env exposto" in md
-    assert "```text\nDB_PASSWORD=****\n```" in md and "**Correção:** remova" in md
-    assert md.index(".env exposto") < md.index("CSP ausente")  # ordenado por severidade
+    assert md.startswith("# Security Report")
+    assert "| CRITICAL | 1 |" in md and "### 1. [CRITICAL] .env exposed" in md
+    assert "```text\nDB_PASSWORD=****\n```" in md and "**Fix:** remove it" in md
+    assert md.index(".env exposed") < md.index("CSP missing")  # ordered by severity
 
 
 def test_markdown_table_cells_escape_pipes():

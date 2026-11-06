@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "web-vuln-scanner"
 dynamic = ["version"]
-description = "Scanner passivo de vulnerabilidades web e de e-mail/DNS, com saída SARIF e priorização por EPSS/KEV"
+description = "Passive web and email/DNS vulnerability scanner, with SARIF output and EPSS/KEV prioritization"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

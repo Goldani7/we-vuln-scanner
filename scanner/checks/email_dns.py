@@ -1,11 +1,11 @@
-"""Segurança de e-mail e reputação do domínio: SPF, DKIM, DMARC e DNSBL.
+"""Email security and domain reputation: SPF, DKIM, DMARC and DNSBL.
 
-Vulnerabilidade: sem SPF/DKIM/DMARC qualquer servidor pode enviar e-mails em nome do domínio,
-facilitando phishing e fraude (BEC).
-Exemplo: sem DMARC com p=reject, um atacante envia "ceo@dominio.com" pedindo uma transferência e
-o servidor do destinatário não tem instrução para descartar a mensagem forjada.
+Vulnerability: without SPF/DKIM/DMARC any server can send email on behalf of the domain,
+making phishing and fraud (BEC) easier.
+Example: without DMARC at p=reject, an attacker sends "ceo@domain.com" asking for a wire
+transfer, and the recipient's server has no instruction to discard the forged message.
 Ref.: RFC 7208 (SPF), RFC 6376 (DKIM), RFC 7489 (DMARC); MITRE ATT&CK T1566 (Phishing).
-Nota: só consultas DNS públicas; nenhum e-mail é enviado.
+Note: public DNS queries only; no email is ever sent.
 """
 import ipaddress
 import logging
@@ -18,14 +18,14 @@ from ..finding import Finding, Severity
 
 log = logging.getLogger(__name__)
 
-# Seletores DKIM comuns. DKIM não permite listar seletores: só dá para testar nomes conhecidos,
-# então a ausência de resultado nunca prova que o DKIM não existe.
+# Common DKIM selectors. DKIM has no way to list selectors: only known names can be tested, so
+# no result ever proves DKIM doesn't exist.
 DKIM_SELECTORS = [
     "default", "google", "selector1", "selector2", "k1", "k2", "mail", "dkim",
     "s1", "s2", "smtp", "mandrill", "mxvault", "zoho", "protonmail",
 ]
 
-# Zonas DNSBL consultadas. Todas aceitam consultas gratuitas de baixo volume.
+# DNSBL zones queried. All of them accept free, low-volume queries.
 IP_BLACKLISTS = ["zen.spamhaus.org", "bl.spamcop.net", "b.barracudacentral.org"]
 DOMAIN_BLACKLISTS = ["dbl.spamhaus.org"]
 MAX_MAIL_IPS = 5
@@ -45,10 +45,10 @@ def _resolver(timeout: float) -> dns.resolver.Resolver:
 
 
 def _query(resolver, name: str, rtype: str) -> list:
-    """Consulta DNS que devolve [] se o nome não existe ou não tem o registro.
+    """DNS query that returns [] when the name doesn't exist or has no such record.
 
-    Timeouts e falhas de resolução propagam como dns.exception.DNSException para o chamador
-    decidir como reportar (ausência de registro é diferente de DNS indisponível).
+    Timeouts and resolution failures propagate as dns.exception.DNSException for the caller to
+    decide how to report them (a missing record differs from DNS being unavailable).
     """
     try:
         return list(resolver.resolve(name, rtype))
@@ -57,15 +57,15 @@ def _query(resolver, name: str, rtype: str) -> list:
 
 
 def _txt_records(resolver, name: str) -> list:
-    """Registros TXT como strings (os pedaços de 255 bytes de cada registro são concatenados)."""
+    """TXT records as strings (the 255-byte chunks of each record are concatenated)."""
     return [b"".join(r.strings).decode("utf-8", "replace") for r in _query(resolver, name, "TXT")]
 
 
 def _dns_failure(check: str, name: str, err: Exception) -> Finding:
     return Finding(
-        check, Severity.INFO, f"Consulta DNS falhou para {name}",
+        check, Severity.INFO, f"DNS query failed for {name}",
         f"{type(err).__name__}: {err}",
-        "Verifique a conectividade/resolução DNS e execute novamente.",
+        "Check DNS connectivity/resolution and run again.",
     )
 
 
@@ -90,60 +90,60 @@ def check_spf(domain: str, timeout: float = 5, resolver=None) -> list:
 
     if not records:
         return [Finding(
-            check, Severity.HIGH, "Registro SPF ausente",
-            f"{domain} não publica um TXT começando com 'v=spf1'.",
-            "Publique um SPF listando os servidores autorizados e terminando em -all "
-            "(ex.: 'v=spf1 include:_spf.seu-provedor.com -all').",
+            check, Severity.HIGH, "Missing SPF record",
+            f"{domain} does not publish a TXT starting with 'v=spf1'.",
+            "Publish an SPF listing the authorized servers and ending in -all "
+            "(e.g. 'v=spf1 include:_spf.your-provider.com -all').",
         )]
     if len(records) > 1:
         return [Finding(
-            check, Severity.HIGH, "Múltiplos registros SPF",
-            f"{len(records)} registros SPF encontrados; a RFC 7208 exige exatamente um "
-            "(o resultado é permerror e o SPF é ignorado).",
-            "Una os registros em um só.", {"records": records},
+            check, Severity.HIGH, "Multiple SPF records",
+            f"{len(records)} SPF records found; RFC 7208 requires exactly one "
+            "(the result is permerror and SPF is ignored).",
+            "Merge the records into a single one.", {"records": records},
         )]
 
     record = records[0]
     terms = record.split()[1:]
-    findings = [Finding(check, Severity.INFO, "Registro SPF presente", record, metadata={"record": record})]
+    findings = [Finding(check, Severity.INFO, "SPF record present", record, metadata={"record": record})]
 
     invalid = [t for t in terms if not (_SPF_MECHANISM.match(t) or _SPF_MODIFIER.match(t))]
     if invalid:
         findings.append(Finding(
-            check, Severity.MEDIUM, "Sintaxe SPF suspeita",
-            f"Termos não reconhecidos: {', '.join(invalid)}.",
-            "Corrija a sintaxe; receptores podem tratar o registro inteiro como erro.",
+            check, Severity.MEDIUM, "Suspicious SPF syntax",
+            f"Unrecognized terms: {', '.join(invalid)}.",
+            "Fix the syntax; recipients may treat the whole record as an error.",
             {"terms": invalid},
         ))
 
     all_term = next((t for t in terms if t.lstrip("+-~?").lower() == "all"), None)
     policy = {
-        "-all": (Severity.INFO, "SPF com -all (hard fail)", ""),
-        "~all": (Severity.LOW, "SPF com ~all (soft fail)",
-                 "Migre para -all quando todos os remetentes legítimos estiverem listados."),
-        "?all": (Severity.MEDIUM, "SPF com ?all (neutro)",
-                 "?all não protege contra falsificação; use -all ou ~all."),
-        "+all": (Severity.HIGH, "SPF com +all (autoriza qualquer servidor)",
-                 "Substitua +all por -all: do jeito atual qualquer um pode falsificar o domínio."),
-        "all": (Severity.HIGH, "SPF com 'all' (equivale a +all)",
-                "Substitua por -all."),
+        "-all": (Severity.INFO, "SPF with -all (hard fail)", ""),
+        "~all": (Severity.LOW, "SPF with ~all (soft fail)",
+                 "Migrate to -all once every legitimate sender is listed."),
+        "?all": (Severity.MEDIUM, "SPF with ?all (neutral)",
+                 "?all offers no protection against spoofing; use -all or ~all."),
+        "+all": (Severity.HIGH, "SPF with +all (authorizes any server)",
+                 "Replace +all with -all: as it stands, anyone can spoof the domain."),
+        "all": (Severity.HIGH, "SPF with 'all' (equivalent to +all)",
+                "Replace it with -all."),
     }
     if all_term is None and not any(t.lower().startswith("redirect=") for t in terms):
         findings.append(Finding(
-            check, Severity.MEDIUM, "SPF sem mecanismo 'all' final",
-            "Sem 'all' (ou redirect=), remetentes não listados recebem resultado neutro.",
-            "Termine o registro com -all.",
+            check, Severity.MEDIUM, "SPF has no final 'all' mechanism",
+            "Without 'all' (or redirect=), unlisted senders get a neutral result.",
+            "End the record with -all.",
         ))
     elif all_term is not None:
         sev, title, rec = policy[all_term.lower()]
-        findings.append(Finding(check, sev, title, f"Terminador do registro: {all_term}", rec))
+        findings.append(Finding(check, sev, title, f"Record terminator: {all_term}", rec))
 
     lookups = _spf_lookup_count(terms)
     if lookups > 10:
         findings.append(Finding(
-            check, Severity.MEDIUM, "SPF excede o limite de 10 consultas DNS",
-            f"Estimativa de {lookups} mecanismos que geram consultas (limite da RFC 7208: 10).",
-            "Reduza includes ou use 'flattening'; acima do limite o SPF falha com permerror.",
+            check, Severity.MEDIUM, "SPF exceeds the 10 DNS lookup limit",
+            f"Estimated {lookups} lookup-generating mechanisms (RFC 7208 limit: 10).",
+            "Reduce includes or use 'flattening'; above the limit SPF fails with permerror.",
             {"lookups": lookups},
         ))
     return findings
@@ -171,32 +171,32 @@ def check_dkim(domain: str, timeout: float = 5, resolver=None, selectors=None) -
     findings = []
     if found:
         findings.append(Finding(
-            check, Severity.INFO, f"DKIM publicado ({len(found)} seletor(es))",
-            f"Seletores encontrados: {', '.join(found)}.", metadata={"selectors": found},
+            check, Severity.INFO, f"DKIM published ({len(found)} selector(s))",
+            f"Selectors found: {', '.join(found)}.", metadata={"selectors": found},
         ))
     tested = len(selectors or DKIM_SELECTORS)
     if revoked and not found and len(revoked) == tested:
-        # Wildcard '*._domainkey' com p= vazio: prática recomendada para domínios que não enviam e-mail.
+        # Wildcard '*._domainkey' with an empty p=: a recommended practice for domains that don't send email.
         return [Finding(
-            check, Severity.INFO, "DKIM explicitamente desabilitado (chaves vazias)",
-            "Todos os seletores testados retornam chave vazia (p=), típico de wildcard em domínio "
-            "que não envia e-mail.", metadata={"selectors": revoked},
+            check, Severity.INFO, "DKIM explicitly disabled (empty keys)",
+            "Every selector tested returns an empty key (p=), typical of a wildcard on a domain "
+            "that doesn't send email.", metadata={"selectors": revoked},
         )]
     if revoked:
         findings.append(Finding(
-            check, Severity.LOW, "Chave DKIM revogada (p= vazio)",
-            f"Seletores com chave vazia: {', '.join(revoked)}.",
-            "Remova seletores antigos ou publique uma chave válida se ainda forem usados.",
+            check, Severity.LOW, "Revoked DKIM key (empty p=)",
+            f"Selectors with an empty key: {', '.join(revoked)}.",
+            "Remove old selectors, or publish a valid key if they're still in use.",
             {"selectors": revoked},
         ))
     if not found and not revoked:
         if errors == len(selectors or DKIM_SELECTORS):
-            return [_dns_failure(check, domain, RuntimeError("todas as consultas falharam"))]
+            return [_dns_failure(check, domain, RuntimeError("every query failed"))]
         findings.append(Finding(
-            check, Severity.LOW, "Nenhum seletor DKIM padrão encontrado",
-            f"Testados {len(selectors or DKIM_SELECTORS)} seletores comuns. Isto não é conclusivo: "
-            "o domínio pode usar um seletor personalizado.",
-            "Confirme com o provedor de e-mail e assine as mensagens com DKIM.",
+            check, Severity.LOW, "No standard DKIM selector found",
+            f"Tested {len(selectors or DKIM_SELECTORS)} common selectors. This is not conclusive: "
+            "the domain may use a custom selector.",
+            "Confirm with the email provider and sign messages with DKIM.",
         ))
     return findings
 
@@ -214,10 +214,10 @@ def check_dmarc(domain: str, timeout: float = 5, resolver=None) -> list:
 
     if not records:
         return [Finding(
-            check, Severity.HIGH, "Registro DMARC ausente",
-            f"Nenhum TXT 'v=DMARC1' em {name}.",
-            "Publique DMARC começando em p=none com rua= para coletar relatórios e evolua "
-            "para quarantine e depois reject.",
+            check, Severity.HIGH, "Missing DMARC record",
+            f"No TXT 'v=DMARC1' at {name}.",
+            "Publish DMARC starting at p=none with rua= to collect reports, and evolve "
+            "to quarantine and then reject.",
         )]
 
     record = records[0]
@@ -227,37 +227,37 @@ def check_dmarc(domain: str, timeout: float = 5, resolver=None) -> list:
             k, v = part.split("=", 1)
             tags[k.strip().lower()] = v.strip()
     policy = tags.get("p", "").lower()
-    findings = [Finding(check, Severity.INFO, "Registro DMARC presente", record,
+    findings = [Finding(check, Severity.INFO, "DMARC record present", record,
                         metadata={"record": record, "policy": policy})]
 
     table = {
-        "none": (Severity.MEDIUM, "Política DMARC p=none (apenas monitoramento)",
-                 "p=none não bloqueia e-mails falsificados; evolua para quarantine/reject."),
-        "quarantine": (Severity.LOW, "Política DMARC p=quarantine",
-                       "Considere p=reject quando os relatórios mostrarem que só há tráfego legítimo."),
-        "reject": (Severity.INFO, "Política DMARC p=reject", ""),
+        "none": (Severity.MEDIUM, "DMARC policy p=none (monitoring only)",
+                 "p=none does not block spoofed email; evolve to quarantine/reject."),
+        "quarantine": (Severity.LOW, "DMARC policy p=quarantine",
+                       "Consider p=reject once reports show only legitimate traffic."),
+        "reject": (Severity.INFO, "DMARC policy p=reject", ""),
     }
     if policy in table:
         sev, title, rec = table[policy]
         findings.append(Finding(check, sev, title, f"p={policy}", rec))
     else:
         findings.append(Finding(
-            check, Severity.MEDIUM, "Política DMARC inválida ou ausente",
-            f"Tag p= ausente ou com valor desconhecido ({policy!r}); receptores ignoram o registro.",
-            "Defina p=none, quarantine ou reject.",
+            check, Severity.MEDIUM, "Invalid or missing DMARC policy",
+            f"Tag p= is missing or has an unknown value ({policy!r}); recipients ignore the record.",
+            "Set p=none, quarantine or reject.",
         ))
 
     pct = tags.get("pct")
     if pct and pct.isdigit() and int(pct) < 100 and policy in ("quarantine", "reject"):
         findings.append(Finding(
-            check, Severity.LOW, f"DMARC aplicado a apenas {pct}% das mensagens",
-            f"pct={pct}", "Eleve para pct=100 depois da fase de testes.",
+            check, Severity.LOW, f"DMARC applied to only {pct}% of messages",
+            f"pct={pct}", "Raise it to pct=100 once the testing phase is over.",
         ))
     if "rua" not in tags:
         findings.append(Finding(
-            check, Severity.LOW, "DMARC sem endereço de relatórios (rua)",
-            "Sem rua= você não recebe relatórios agregados sobre quem envia e-mails pelo domínio.",
-            "Adicione rua=mailto:dmarc@seu-dominio.",
+            check, Severity.LOW, "DMARC has no report address (rua)",
+            "Without rua= you get no aggregate reports about who sends email as this domain.",
+            "Add rua=mailto:dmarc@your-domain.",
         ))
     return findings
 
@@ -265,7 +265,7 @@ def check_dmarc(domain: str, timeout: float = 5, resolver=None) -> list:
 # ------------------------------------------------------------------------- DNSBL
 
 def _mail_ips(resolver, domain: str) -> list:
-    """IPv4 dos servidores de e-mail (MX) do domínio; sem MX, usa o A do próprio domínio."""
+    """IPv4 of the domain's mail servers (MX); with no MX, falls back to the domain's own A record."""
     hosts = [str(r.exchange).rstrip(".") for r in _query(resolver, domain, "MX")] or [domain]
     ips = []
     for host in hosts:
@@ -279,17 +279,17 @@ def _mail_ips(resolver, domain: str) -> list:
 
 
 def _dnsbl_listed(resolver, query_name: str):
-    """Código de retorno 127.x.x.x se listado; None se não listado.
+    """127.x.x.x return code if listed; None if not listed.
 
-    Levanta DNSException em falha de consulta. Respostas 127.255.255.x (Spamhaus) indicam
-    erro/resolver bloqueado e não listagem, então são tratadas como falha.
+    Raises DNSException on a query failure. 127.255.255.x responses (Spamhaus) indicate an
+    error/blocked resolver rather than a real listing, so they're treated as a failure.
     """
     answers = _query(resolver, query_name, "A")
     if not answers:
         return None
     code = str(answers[0])
     if code.startswith("127.255.255."):
-        raise dns.exception.DNSException(f"DNSBL recusou a consulta ({code}); resolver público bloqueado?")
+        raise dns.exception.DNSException(f"DNSBL refused the query ({code}); public resolver blocked?")
     return code
 
 
@@ -317,20 +317,20 @@ def check_dnsbl(domain: str, timeout: float = 5, resolver=None) -> list:
             continue
         if code:
             findings.append(Finding(
-                check, Severity.HIGH, f"{subject} listado em {zone}",
-                f"A zona {zone} respondeu {code} para {subject}.",
-                f"Investigue a causa e solicite a remoção (delisting) em {zone}.",
+                check, Severity.HIGH, f"{subject} listed on {zone}",
+                f"Zone {zone} responded {code} for {subject}.",
+                f"Investigate the cause and request delisting from {zone}.",
                 {"subject": subject, "zone": zone, "code": code},
             ))
     if failures:
         findings.append(Finding(
-            check, Severity.INFO, "Algumas consultas DNSBL falharam",
-            f"{failures} de {len(queries)} consultas sem resposta; o resultado pode estar incompleto.",
+            check, Severity.INFO, "Some DNSBL queries failed",
+            f"{failures} of {len(queries)} queries got no response; the result may be incomplete.",
         ))
     if not any(f.severity is Severity.HIGH for f in findings):
         findings.append(Finding(
-            check, Severity.INFO, "Não listado nas DNSBLs consultadas",
-            f"{len(queries) - failures} consultas bem-sucedidas "
-            f"({len(ips)} IP(s) de e-mail + domínio).",
+            check, Severity.INFO, "Not listed on the DNSBLs queried",
+            f"{len(queries) - failures} successful queries "
+            f"({len(ips)} mail IP(s) + domain).",
         ))
     return findings

@@ -47,7 +47,7 @@ def test_register_and_query():
 def test_duplicate_names_are_rejected():
     r = Registry()
     r.register(spec("a"))
-    with pytest.raises(ValueError, match="já registrado"):
+    with pytest.raises(ValueError, match="already registered"):
         r.register(spec("a"))
 
 
@@ -64,7 +64,7 @@ def test_broken_plugins_are_isolated_and_reported():
     r.register(spec("builtin"))
     loaded = r.load_plugins([
         FakeEntryPoint("boom", error=ImportError("no module")),
-        FakeEntryPoint("wrong", obj=lambda: None),               # não é CheckSpec
+        FakeEntryPoint("wrong", obj=lambda: None),               # not a CheckSpec
         FakeEntryPoint("clash", obj=spec("builtin")),            # tenta sobrescrever um embutido
         FakeEntryPoint("good", obj=spec("good_check")),
     ])

@@ -24,79 +24,79 @@ log = logging.getLogger(__name__)
 REGISTRY = Registry()
 for _spec in (
     CheckSpec("headers", "response", check_headers, "web",
-              "Verifica headers de segurança (CSP, HSTS, X-Frame-Options...). Eles instruem o navegador a "
-              "bloquear XSS, clickjacking e downgrade para HTTP."),
+              "Checks security headers (CSP, HSTS, X-Frame-Options...). They tell the browser to "
+              "block XSS, clickjacking and HTTP downgrade."),
     CheckSpec("cookies", "response", check_cookies, "web",
-              "Verifica as flags Secure, HttpOnly e SameSite dos cookies. Sem elas, cookies de sessão podem "
-              "ser roubados via XSS, rede insegura ou CSRF."),
+              "Checks the Secure, HttpOnly and SameSite cookie flags. Without them, session cookies "
+              "can be stolen via XSS, an insecure network, or CSRF."),
     CheckSpec("tech_detection", "response", check_tech_detection, "web",
-              "Detecta software/versão expostos em Server/X-Powered-By e consulta CVEs na NVD, priorizadas "
-              "por EPSS e CISA KEV."),  # consulta a NVD (requests): roda em thread
+              "Detects software/version exposed in Server/X-Powered-By and looks up CVEs in the NVD, "
+              "prioritized by EPSS and CISA KEV."),  # queries the NVD (requests): runs in a thread
     CheckSpec("waf", "response", check_waf, "web",
-              "Identifica passivamente WAF/CDN (Cloudflare, Akamai, CloudFront...) por headers, cookies e "
-              "páginas de bloqueio. A borda mascara a origem e pode filtrar achados."),
+              "Passively identifies WAF/CDN (Cloudflare, Akamai, CloudFront...) from headers, cookies "
+              "and block pages. The edge masks the origin and may filter findings."),
     CheckSpec("ssl_tls", "url", check_ssl_tls, "web",
-              "Verifica versões do TLS aceitas e validade do certificado. Protocolos antigos e certificados "
-              "expirados permitem interceptação e quebram a confiança."),
+              "Checks the TLS versions accepted and the certificate's validity. Old protocols and "
+              "expired certificates allow interception and break trust."),
     CheckSpec("cors", "async", check_cors, "web",
-              "Testa se o CORS aceita origens arbitrárias. Uma política permissiva deixa sites maliciosos "
-              "ler respostas autenticadas do usuário."),
+              "Tests whether CORS accepts arbitrary origins. A permissive policy lets malicious sites "
+              "read the user's authenticated responses."),
     CheckSpec("exposed_files", "async", check_exposed_files, "web",
-              "Procura arquivos sensíveis comuns (.env, .git, backups) e valida o conteúdo para evitar falsos "
-              "positivos. Eles costumam vazar credenciais e código-fonte."),
+              "Looks for common sensitive files (.env, .git, backups) and validates the content to "
+              "avoid false positives. They tend to leak credentials and source code."),
     CheckSpec("misconfig", "async", check_misconfig, "web",
-              "Verifica redirecionamento HTTP→HTTPS, método TRACE, listagem de diretório e páginas de erro "
-              "com stack trace, que vazam informação sobre o servidor."),
+              "Checks HTTP->HTTPS redirection, the TRACE method, directory listing, and error pages "
+              "with a stack trace, which leak information about the server."),
     CheckSpec("subdomains", "async", check_subdomains, "recon",
-              "Enumeração passiva de subdomínios via Certificate Transparency (crt.sh)."),
+              "Passive subdomain enumeration via Certificate Transparency (crt.sh)."),
     CheckSpec("portscan", "async", check_portscan, "web",
-              "Port scan TCP connect numa lista curta de portas comuns. ATIVO: exige --allow-active "
-              "e --scope.", active=True),
+              "TCP-connect port scan over a short list of common ports. ACTIVE: requires "
+              "--allow-active and --scope.", active=True),
     CheckSpec("waf_active", "async", check_waf_active, "web",
-              "Sondagem ativa de WAF com um padrão de teste conhecido (sem payload funcional). "
-              "ATIVO: exige --allow-active e --scope.", active=True),
-    CheckSpec("spf", "domain", check_spf, "email", "SPF: autoriza quais servidores enviam e-mail pelo domínio."),
-    CheckSpec("dkim", "domain", check_dkim, "email", "DKIM: assinatura criptográfica dos e-mails enviados."),
-    CheckSpec("dmarc", "domain", check_dmarc, "email", "DMARC: política contra e-mails falsificados."),
-    CheckSpec("dnsbl", "domain", check_dnsbl, "email", "Reputação dos servidores de e-mail em listas DNSBL."),
+              "Active WAF probe using a known, non-functional test pattern. "
+              "ACTIVE: requires --allow-active and --scope.", active=True),
+    CheckSpec("spf", "domain", check_spf, "email", "SPF: which servers are authorized to send email for the domain."),
+    CheckSpec("dkim", "domain", check_dkim, "email", "DKIM: cryptographic signature of outgoing email."),
+    CheckSpec("dmarc", "domain", check_dmarc, "email", "DMARC: policy against spoofed email."),
+    CheckSpec("dnsbl", "domain", check_dnsbl, "email", "Reputation of the mail servers on DNSBL lists."),
 ):
     REGISTRY.register(_spec)
-REGISTRY.load_plugins()  # checks de terceiros via entry point "wvs.checks"
+REGISTRY.load_plugins()  # third-party checks via the "wvs.checks" entry point
 
 ALL_CHECKS = REGISTRY.names("web")
 EMAIL_CHECKS = REGISTRY.names("email")
 RECON_CHECKS = REGISTRY.names("recon")
 MODES = ("web", "email", "recon", "full")
 
-# Visões por tipo de assinatura (derivadas do registro).
-RESPONSE_CHECKS = REGISTRY.by_kind("response")  # sobre a resposta da página inicial (roda em thread)
-ASYNC_CHECKS = REGISTRY.by_kind("async")        # recebem o ScanContext
-URL_CHECKS = REGISTRY.by_kind("url")            # bloqueantes (socket): em thread
-DOMAIN_CHECKS = REGISTRY.by_kind("domain")      # bloqueantes (DNS): em thread
+# Views by signature kind (derived from the registry).
+RESPONSE_CHECKS = REGISTRY.by_kind("response")  # over the homepage response (runs in a thread)
+ASYNC_CHECKS = REGISTRY.by_kind("async")        # receive the ScanContext
+URL_CHECKS = REGISTRY.by_kind("url")            # blocking (socket): in a thread
+DOMAIN_CHECKS = REGISTRY.by_kind("domain")      # blocking (DNS): in a thread
 
 
 def _failure(name: str, e: Exception) -> list:
     if isinstance(e, RequestFailed):
-        return [Finding(name, Severity.INFO, f"Check '{name}' sem resposta do alvo", e.describe(),
-                        "Verifique a disponibilidade e reduza --rate/--concurrency se houver bloqueio.",
+        return [Finding(name, Severity.INFO, f"Check '{name}' got no response from the target", e.describe(),
+                        "Check availability and lower --rate/--concurrency if you're being blocked.",
                         rule_id=f"{name}.unreachable")]
-    return [Finding(name, Severity.INFO, f"Check '{name}' falhou", f"{type(e).__name__}: {e}",
-                    "Execute com -v para ver o traceback.", rule_id=f"{name}.error")]
+    return [Finding(name, Severity.INFO, f"Check '{name}' failed", f"{type(e).__name__}: {e}",
+                    "Run with -v to see the traceback.", rule_id=f"{name}.error")]
 
 
 async def _safe(name, awaitable, progress_cb=None) -> list:
-    """Isola um check: nenhuma exceção (timeout, TLS, bug) derruba o scan inteiro.
+    """Isolates a check: no exception (timeout, TLS, bug) ever takes down the whole scan.
 
-    `progress_cb(event, name, *rest)` é opcional e só para UI (ex.: scanner.ui.ProgressReporter);
-    nunca afeta o resultado do scan. "start" antes de rodar, "done" com a contagem de achados depois.
+    `progress_cb(event, name, *rest)` is optional and UI-only (e.g. scanner.ui.ProgressReporter);
+    it never affects the scan's result. "start" before running, "done" with the finding count after.
     """
-    log.debug("executando check %s", name)
+    log.debug("running check %s", name)
     if progress_cb:
         progress_cb("start", name)
     try:
         result = await awaitable
     except Exception as e:  # noqa: BLE001
-        log.debug("check %s falhou", name, exc_info=True)
+        log.debug("check %s failed", name, exc_info=True)
         result = _failure(name, e)
     if progress_cb:
         progress_cb("done", name, len(result))
@@ -108,7 +108,7 @@ def _tag(findings: list, target: str) -> list:
 
 
 def _looks_blocked(s: dict) -> bool:
-    """Muitos 403/406 em proporção alta sugerem bloqueio ativo (WAF/rate limit), não só arquivos protegidos."""
+    """A high ratio of 403/406 suggests active blocking (WAF/rate limit), not just protected files."""
     return s["forbidden"] >= 10 and s["forbidden"] >= 0.5 * s["requests"]
 
 
@@ -117,9 +117,9 @@ def _scope_notice(client: HttpClient) -> list:
     if not n:
         return []
     return [Finding(
-        "core", Severity.INFO, f"{n} requisição(ões) bloqueada(s) por estarem fora do escopo",
-        "O alvo redirecionou (ou um check tentou alcançar) um host que não está no arquivo de escopo; "
-        "a requisição NÃO foi enviada.", "Se o host também é autorizado, adicione-o ao arquivo de escopo.",
+        "core", Severity.INFO, f"{n} request(s) blocked for being out of scope",
+        "The target redirected to (or a check tried to reach) a host that isn't in the scope file; "
+        "the request was NOT sent.", "If that host is also authorized, add it to the scope file.",
         dict(client.stats), rule_id="core.out-of-scope", confidence="high")]
 
 
@@ -128,15 +128,15 @@ def _rate_limit_notice(client: HttpClient) -> list:
     if not s["throttled"] and not s["failures"] and not _looks_blocked(s):
         return []
     return [Finding(
-        "core", Severity.INFO, "Alvo limitou ou recusou requisições; resultados podem estar incompletos",
-        f"{s['throttled']} resposta(s) 429, {s['forbidden']} resposta(s) 403/406, {s['failures']} falha(s) de rede, "
-        f"{s['retries']} retentativa(s) em {s['requests']} requisição(ões).",
-        "Reduza --rate e --concurrency, ou combine uma liberação do seu IP com o cliente.",
+        "core", Severity.INFO, "Target rate-limited or refused requests; results may be incomplete",
+        f"{s['throttled']} 429 response(s), {s['forbidden']} 403/406 response(s), {s['failures']} network "
+        f"failure(s), {s['retries']} retry(ies) out of {s['requests']} request(s).",
+        "Lower --rate and --concurrency, or arrange an allowlist for your IP with the client.",
         dict(s), rule_id="core.throttled", confidence="high")]
 
 
 def default_web_checks(config: ScanConfig) -> list:
-    """Checks web padrão; os ativos só entram com allow_active."""
+    """Default web checks; active ones only join in when allow_active is set."""
     return REGISTRY.names("web", include_active=config.allow_active)
 
 
@@ -145,14 +145,14 @@ async def scan_web_async(ctx: ScanContext, checks, progress_cb=None) -> list:
     try:
         response = await ctx.index() if any(c in RESPONSE_CHECKS for c in checks) else None
     except RequestFailed as e:
-        if e.kind == "out_of_scope":  # restrição do scan, não uma vulnerabilidade do alvo
-            return [Finding("core", Severity.INFO, "Redirecionamento para fora do escopo bloqueado", str(e),
-                            "Se o host de destino também é autorizado, adicione-o ao arquivo de escopo; "
-                            "caso contrário, aponte o scan para a URL final dentro do escopo.",
+        if e.kind == "out_of_scope":  # a scan restriction, not a vulnerability of the target
+            return [Finding("core", Severity.INFO, "Redirect to an out-of-scope host blocked", str(e),
+                            "If the destination host is also authorized, add it to the scope file; "
+                            "otherwise point the scan at the final URL that is within scope.",
                             evidence=f"GET {ctx.url} → {e.describe()}", rule_id="core.connect-out_of_scope",
                             confidence="high")]
-        return [Finding("core", Severity.HIGH, f"Falha ao conectar ao alvo ({e.kind})", str(e),
-                        "Verifique a URL, o certificado (use --insecure só para diagnóstico) e a disponibilidade.",
+        return [Finding("core", Severity.HIGH, f"Failed to connect to the target ({e.kind})", str(e),
+                        "Check the URL, the certificate (use --insecure only to diagnose), and availability.",
                         evidence=f"GET {ctx.url} → {e.describe()}", rule_id=f"core.connect-{e.kind}",
                         confidence="high")]
     jobs = []
@@ -175,13 +175,13 @@ async def scan_email_async(domain: str, config: ScanConfig, checks=None, progres
 
 
 def extract_domain(target: str) -> str:
-    """Hostname de uma URL ou domínio puro ('https://a.com:8443/x' -> 'a.com')."""
+    """Hostname of a URL or a plain domain ('https://a.com:8443/x' -> 'a.com')."""
     host = urlparse(target if "://" in target else f"//{target}").hostname
     return (host or "").rstrip(".").lower()
 
 
 def planned_checks(mode: str, web_checks=None, config: ScanConfig = None) -> list:
-    """Nomes de checks que `scan_target(_async)` vai rodar para este modo (para UI de progresso)."""
+    """Names of the checks `scan_target(_async)` will run for this mode (for the progress UI)."""
     config = config or ScanConfig()
     names = []
     if mode in ("web", "full"):
@@ -196,7 +196,7 @@ def planned_checks(mode: str, web_checks=None, config: ScanConfig = None) -> lis
 async def scan_target_async(target: str, mode: str = "full", web_checks=None,
                             config: ScanConfig = None, transport=None, progress_cb=None) -> list:
     if mode not in MODES:
-        raise ValueError(f"modo inválido: {mode}")
+        raise ValueError(f"invalid mode: {mode}")
     config = config or ScanConfig()
     url = target if "://" in target else f"https://{target}"
     findings = []
@@ -218,11 +218,11 @@ async def scan_target_async(target: str, mode: str = "full", web_checks=None,
 
 def scan_target(target: str, mode: str = "full", web_checks=None, timeout: float = 10,
                 config: ScanConfig = None, progress_cb=None) -> list:
-    """Ponto de entrada síncrono da CLI: aceita URL ou domínio."""
+    """Synchronous entry point for the CLI: accepts a URL or a domain."""
     config = config or ScanConfig(timeout=timeout)
     return asyncio.run(scan_target_async(target, mode, web_checks, config, progress_cb=progress_cb))
 
 
 def scan(url: str, checks=None, timeout: int = 8, config: ScanConfig = None) -> list:
-    """Scan web síncrono (usado pela API). Seguro de chamar de uma thread sem event loop."""
+    """Synchronous web scan (used by the API). Safe to call from a thread with no event loop."""
     return scan_target(url, mode="web", web_checks=checks, timeout=timeout, config=config)

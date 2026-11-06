@@ -1,10 +1,11 @@
-# Contribuindo
+# Contributing
 
-Obrigado por querer melhorar o web-vuln-scanner. Duas regras valem para tudo: **só módulos que respeitam
-o escopo ético do projeto** (passivos por padrão; intrusivos exigem `active=True` e `--allow-active`) e
-**nenhum teste pode depender de rede** (use `httpx.MockTransport`, veja `tests/conftest.py`).
+Thanks for wanting to improve web-vuln-scanner. Two rules apply to everything: **only modules that
+respect the project's ethical scope** (passive by default; intrusive ones require `active=True` and
+`--allow-active`) and **no test may depend on the network** (use `httpx.MockTransport`, see
+`tests/conftest.py`).
 
-## Ambiente
+## Environment
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
@@ -12,77 +13,104 @@ pip install -e ".[dev]"
 pytest tests -q
 ```
 
-## Escrevendo um check
+## Modules and severity
 
-Um check é uma função que devolve `list[Finding]` + um `CheckSpec` que a descreve.
+| Module | What it checks |
+|---|---|
+| `headers` | CSP, HSTS, X-Frame-Options, Referrer-Policy, COOP/CORP, and more — evaluates the *value*, not just presence |
+| `cookies` | Secure, HttpOnly, SameSite flags, prioritizing session-looking cookie names |
+| `tech_detection` | Server/X-Powered-By exposure and known CVEs (NVD), prioritized by EPSS and CISA KEV |
+| `waf` / `waf_active` | Passive WAF/CDN fingerprinting; `waf_active` is an active probe (see below) |
+| `ssl_tls` | TLS versions accepted and certificate validity |
+| `cors` | Reflected-origin / credentials misconfigurations |
+| `exposed_files` | `.env`, `.git`, backups, keys... validated by content signature to avoid false positives |
+| `misconfig` | HTTP→HTTPS redirect, TRACE, directory listing, debug/error pages, security.txt |
+| `subdomains` | Passive enumeration via Certificate Transparency (crt.sh) |
+| `spf` / `dkim` / `dmarc` / `dnsbl` | Email authentication and sender reputation |
+| `portscan` / `waf_active` | **Active** checks — see below |
 
-| `kind` | Assinatura | Quando usar |
+Severity criteria: **critical** = a secret or sensitive data is confirmed reachable; **high** =
+direct exploitation is likely; **medium** = weakens defenses or leaks useful information; **low**
+= hardening; **info** = confirmations and context.
+
+## Writing a check
+
+A check is a function returning `list[Finding]` plus a `CheckSpec` describing it.
+
+| `kind` | Signature | When to use it |
 |---|---|---|
-| `response` | `fn(response) -> list` | Analisar a resposta da página inicial (headers, cookies, corpo). Roda em thread |
-| `async` | `async fn(ctx) -> list` | Fazer requisições extras com `ctx.client` (herda rate limit, retry, proxy) |
-| `url` | `fn(url, timeout=) -> list` | Código bloqueante sobre a URL (sockets) |
-| `domain` | `fn(domain, timeout=) -> list` | Código bloqueante sobre o domínio (DNS) |
+| `response` | `fn(response) -> list` | Analyze the homepage response (headers, cookies, body). Runs in a thread |
+| `async` | `async fn(ctx) -> list` | Make extra requests via `ctx.client` (inherits rate limit, retry, proxy) |
+| `url` | `fn(url, timeout=) -> list` | Blocking code over the URL (sockets) |
+| `domain` | `fn(domain, timeout=) -> list` | Blocking code over the domain (DNS) |
 
-`category` define o modo em que roda: `web`, `email` ou `recon` (recon só aceita `async`).
+`category` sets the mode it runs in: `web`, `email` or `recon` (recon only accepts `async`).
 
-### Boas práticas para os `Finding`
+### Finding best practices
 
-- `severity`: `critical` = segredo/dado sensível comprovadamente acessível; `high` = exploração direta
-  provável; `medium` = enfraquece defesas; `low` = hardening; `info` = confirmações e contexto.
-- `evidence`: o que foi **observado**. **Nunca** inclua segredos: mascare valores (`DB_PASSWORD=****`).
-- `remediation`: um passo concreto, não "melhore a segurança".
-- `confidence`: `high` só se o achado foi validado (assinatura de conteúdo, eco confirmado). Heurísticas
-  são `low`/`medium`.
-- `rule_id` estável (`meucheck.regra`): vira o `ruleId` do SARIF. `cwe` e `references` quando houver.
-- Evite falsos positivos: um status 200 não prova nada; valide o conteúdo.
-- Use `ctx.client.request(...)` em vez de abrir conexões próprias e trate `RequestFailed`.
+- `evidence`: what was **observed**. **Never** include secrets: mask values (`DB_PASSWORD=****`).
+- `remediation`: one concrete step, not "improve security".
+- `confidence`: `high` only if the finding was validated (content signature, confirmed echo).
+  Heuristics are `low`/`medium`.
+- Stable `rule_id` (`mycheck.rule`): becomes the SARIF `ruleId`. Add `cwe` and `references` when there's one.
+- Avoid false positives: a 200 status proves nothing on its own; validate the content.
+- Use `ctx.client.request(...)` instead of opening your own connections, and handle `RequestFailed`.
 
-## Plugins externos (sem alterar este repositório)
+## External plugins (no changes to this repo needed)
 
-Um plugin é um pacote que expõe um `CheckSpec` pelo entry point `wvs.checks`. Exemplo completo e
-instalável em [`examples/wvs-plugin-cache-control`](examples/wvs-plugin-cache-control).
+A plugin is a package that exposes a `CheckSpec` via the `wvs.checks` entry point. Full, installable
+example at [`examples/wvs-plugin-cache-control`](examples/wvs-plugin-cache-control).
 
 ```python
-# meu_plugin/__init__.py
+# my_plugin/__init__.py
 from scanner.finding import Finding, Severity
 from scanner.registry import CheckSpec
 
-def check_meu_header(response):
-    if "x-meu-header" in response.headers:
+def check_my_header(response):
+    if "x-my-header" in response.headers:
         return []
-    return [Finding("meu_header", Severity.LOW, "X-Meu-Header ausente",
-                    remediation="Adicione o header.", rule_id="meu_header.missing")]
+    return [Finding("my_header", Severity.LOW, "X-My-Header missing",
+                    remediation="Add the header.", rule_id="my_header.missing")]
 
-SPEC = CheckSpec(name="meu_header", kind="response", func=check_meu_header,
-                 category="web", description="Exige o header X-Meu-Header.")
+SPEC = CheckSpec(name="my_header", kind="response", func=check_my_header,
+                 category="web", description="Requires the X-My-Header header.")
 ```
 
 ```toml
-# pyproject.toml do plugin
+# the plugin's pyproject.toml
 [project.entry-points."wvs.checks"]
-meu_header = "meu_plugin:SPEC"
+my_header = "my_plugin:SPEC"
 ```
 
-Depois de `pip install`, confira com `wvs --list-checks` (a coluna ORIGEM mostra `plugin:<nome>`).
-Um entry point pode apontar também para uma **lista** de `CheckSpec`. Plugins que falham ao carregar,
-têm nome repetido ou não apontam para um `CheckSpec` são **ignorados com um aviso**: nunca derrubam o scan.
+After `pip install`, confirm with `wvs --list-checks` (the SOURCE column shows `plugin:<name>`).
+An entry point can also point to a **list** of `CheckSpec`. Plugins that fail to load, repeat a
+name, or don't point to a `CheckSpec` are **skipped with a warning**: they never take down the scan.
 
-## Checks ativos
+## Active checks
 
-Qualquer check que envie tráfego fora do padrão de navegação comum (payloads de teste, varredura de
-portas) deve declarar `active=True` no `CheckSpec`. Exemplos já no projeto: `portscan` (TCP connect) e
-`waf_active` (sondagem com padrão de teste). Eles ficam fora dos padrões e só rodam com `--allow-active`
-**e** `--scope` juntos — a CLI recusa `--allow-active` sem escopo. Use apenas em alvos com autorização
-expressa; se o check usa sockets fora do cliente HTTP (como `portscan`), verifique o escopo manualmente
-dentro do check também, como defesa em profundidade.
+Any check that sends traffic outside normal browsing patterns (test payloads, port scanning) must
+declare `active=True` in its `CheckSpec`. Examples already in the project: `portscan` (TCP connect)
+and `waf_active` (a test-pattern probe). They're excluded from the defaults and only run with
+`--allow-active` **and** `--scope` together — the CLI refuses `--allow-active` without a scope.
+Use only against targets with explicit authorization; if the check uses sockets outside the HTTP
+client (like `portscan`), check the scope manually inside the check too, as defense in depth.
 
-## Interface rica (`scanner/ui.py`)
+### Scope file format
 
-A camada `--rich` é só apresentação: nunca decide severidade nem filtra achados (isso é sempre
-`scanner.report`/`scanner.core`). Ao adicionar um check novo, não é preciso tocar em `ui.py`: a
-barra de progresso usa o nome do check automaticamente via `core.planned_checks()`.
+```text
+example.com            # this host only
+*.api.example.com      # any subdomain (does not include api.example.com)
+203.0.113.0/24         # an IP range (matches targets given as an IP)
+!internal.example.com  # exclusion (always wins over any inclusion)
+```
+
+## Rich UI (`scanner/ui.py`)
+
+The `--rich` layer is presentation only: it never decides severity or filters findings (that's
+always `scanner.report`/`scanner.core`). When adding a new check, there's no need to touch
+`ui.py`: the progress bar picks up the check's name automatically via `core.planned_checks()`.
 
 ## Pull requests
 
-Commits no estilo [Conventional Commits](https://www.conventionalcommits.org/) (`feat(waf): ...`),
-testes para o comportamento novo e README atualizado quando mudar a CLI ou a saída.
+Commits in [Conventional Commits](https://www.conventionalcommits.org/) style (`feat(waf): ...`),
+tests for new behavior, and an updated README when the CLI or output changes.

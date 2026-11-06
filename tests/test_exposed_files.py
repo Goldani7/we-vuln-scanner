@@ -60,7 +60,7 @@ def test_zip_backup_detected_by_magic_bytes():
 def test_admin_found_only_when_differs_from_baseline():
     found = by_rule(run_check(check_exposed_files, site({"/admin": (200, "<html>login page here</html>")})))
     assert found["exposed.admin"].confidence == "low"
-    # servidor que devolve 403 para tudo não revela um /admin real
+    # a server returning 403 for everything doesn't reveal a real /admin
     none = run_check(check_exposed_files, site({}, default=(403, "forbidden")))
     assert "exposed.admin" not in by_rule(none)
 

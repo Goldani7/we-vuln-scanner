@@ -17,7 +17,7 @@ def _rules(findings):
 
 def test_missing_csp_is_medium_with_evidence():
     f = _rules(check_headers(make_response()))["headers.csp-missing"]
-    assert f.severity is Severity.MEDIUM and f.evidence == "ausente" and f.remediation
+    assert f.severity is Severity.MEDIUM and f.evidence == "missing" and f.remediation
 
 
 def test_good_headers_have_no_actionable_findings():

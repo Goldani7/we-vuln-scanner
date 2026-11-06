@@ -98,7 +98,7 @@ def test_circuit_breaker_stops_hammering_a_dead_host():
 
 def test_rate_limiter_spaces_requests():
     async def main():
-        rl = RateLimiter(20)  # 50 ms entre requisições
+        rl = RateLimiter(20)  # 50 ms between requests
         t = time.monotonic()
         for _ in range(4):
             await rl.wait()

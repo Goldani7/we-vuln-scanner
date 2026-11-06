@@ -31,7 +31,7 @@ def test_progress_reporter_tracks_declared_checks():
         reporter.on_event("start", "headers")
         reporter.on_event("done", "headers", 3)
         task = next(t for t in progress.tasks if t.id == reporter.tasks["headers"])
-        assert task.completed == 1 and "3 achado" in task.description
+        assert task.completed == 1 and "3 finding" in task.description
 
 
 def test_progress_reporter_handles_unplanned_check():
@@ -45,36 +45,36 @@ def test_progress_reporter_handles_unplanned_check():
 
 def test_print_results_renders_table_with_severity_and_hides_info():
     console = ui.Console(file=io.StringIO(), width=120)
-    findings = [Finding("headers", Severity.CRITICAL, "achado crítico", confidence="high"),
-               Finding("tls", Severity.INFO, "só confirmação")]
+    findings = [Finding("headers", Severity.CRITICAL, "critical finding", confidence="high"),
+               Finding("tls", Severity.INFO, "just a confirmation")]
     ui.print_results(console, findings, {"target": "https://ex.com"})
     out = console.file.getvalue()
-    assert "achado crítico" in out and "CRÍTICO" in out
-    assert "só confirmação" not in out  # INFO não entra na tabela de achados
+    assert "critical finding" in out and "CRITICAL" in out
+    assert "just a confirmation" not in out  # INFO never enters the findings table
 
 
 def test_print_results_with_no_actionable_findings_does_not_crash():
     console = ui.Console(file=io.StringIO(), width=100)
     ui.print_results(console, [Finding("x", Severity.INFO, "a")], {"target": "https://ex.com"})
-    assert "Nenhum achado acionável" in console.file.getvalue()
+    assert "No actionable findings" in console.file.getvalue()
 
 
 def test_print_results_marks_new_from_baseline_status():
     import dataclasses
     console = ui.Console(file=io.StringIO(), width=100)
-    f = dataclasses.replace(Finding("x", Severity.HIGH, "achado"), status="new")
+    f = dataclasses.replace(Finding("x", Severity.HIGH, "finding"), status="new")
     ui.print_results(console, [f], {})
-    assert "(NOVO)" in console.file.getvalue()
+    assert "(NEW)" in console.file.getvalue()
 
 
 @pytest.mark.parametrize("severity,confidence,expected", [
-    (Severity.CRITICAL, "high", "alto"), (Severity.HIGH, "medium", "alto"),
-    (Severity.HIGH, "low", "moderado"), (Severity.MEDIUM, "high", "moderado"),
-    (Severity.LOW, "high", "baixo"), (Severity.INFO, "high", "informativo"),
+    (Severity.CRITICAL, "high", "high"), (Severity.HIGH, "medium", "high"),
+    (Severity.HIGH, "low", "moderate"), (Severity.MEDIUM, "high", "moderate"),
+    (Severity.LOW, "high", "low"), (Severity.INFO, "high", "informational"),
 ])
 def test_exploitability_tag(severity, confidence, expected):
     assert Finding("c", severity, "t", confidence=confidence).exploitability == expected
 
 
 def test_exploitability_is_in_to_dict():
-    assert Finding("c", Severity.HIGH, "t").to_dict()["exploitability"] == "alto"
+    assert Finding("c", Severity.HIGH, "t").to_dict()["exploitability"] == "high"

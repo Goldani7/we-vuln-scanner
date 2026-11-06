@@ -44,8 +44,8 @@ def test_load_accepts_plain_list(tmp_path):
 
 
 @pytest.mark.parametrize("content,msg", [
-    ("nao e json", "JSON válido"), ('{"foo": 1}', "lista de findings"),
-    ('{"findings": [{"title": "sem fingerprint"}]}', "fingerprint"),
+    ("not json at all", "valid JSON"), ('{"foo": 1}', "list of findings"),
+    ('{"findings": [{"title": "no fingerprint"}]}', "fingerprint"),
 ])
 def test_load_rejects_bad_files(tmp_path, content, msg):
     p = tmp_path / "b.json"
@@ -55,7 +55,7 @@ def test_load_rejects_bad_files(tmp_path, content, msg):
 
 
 def test_load_missing_file():
-    with pytest.raises(BaselineError, match="não foi possível ler"):
+    with pytest.raises(BaselineError, match="could not read"):
         load_baseline("/nao/existe.json")
 
 
@@ -65,28 +65,28 @@ def test_same_finding_on_different_target_counts_as_new(tmp_path):
     assert compare([other], base).new == [other]
 
 
-# --- integração com CLI e relatórios
+# --- integration with the CLI and reports
 def run(argv, findings):
     with patch("scanner.cli.scan_target", return_value=findings):
         return main(argv)
 
 
 def test_cli_fails_only_on_new_findings_with_new_only(tmp_path, capsys):
-    base = write_baseline(tmp_path, [F("conhecido")])
-    # achado crítico já conhecido: com --new-only não derruba o CI
-    assert run(["-t", "ex.com", "--baseline", base, "--new-only"], [F("conhecido", Severity.CRITICAL)]) == 0
-    # sem --new-only o mesmo achado derruba
-    assert run(["-t", "ex.com", "--baseline", base], [F("conhecido")]) == 2
-    # achado novo derruba
-    assert run(["-t", "ex.com", "--baseline", base, "--new-only"], [F("novo")]) == 2
-    assert "(NOVO)" in capsys.readouterr().out
+    base = write_baseline(tmp_path, [F("known")])
+    # already-known critical finding: with --new-only it doesn't fail the CI
+    assert run(["-t", "ex.com", "--baseline", base, "--new-only"], [F("known", Severity.CRITICAL)]) == 0
+    # without --new-only the same finding does fail it
+    assert run(["-t", "ex.com", "--baseline", base], [F("known")]) == 2
+    # a new finding fails it
+    assert run(["-t", "ex.com", "--baseline", base, "--new-only"], [F("new")]) == 2
+    assert "(NEW)" in capsys.readouterr().out
 
 
 def test_cli_text_reports_baseline_counts(tmp_path, capsys):
-    base = write_baseline(tmp_path, [F("corrigido"), F("fica")])
-    run(["-t", "ex.com", "--baseline", base], [F("fica"), F("novo")])
+    base = write_baseline(tmp_path, [F("fixed"), F("stays")])
+    run(["-t", "ex.com", "--baseline", base], [F("stays"), F("new")])
     out = capsys.readouterr().out
-    assert "1 novo(s), 1 inalterado(s), 1 resolvido(s)" in out
+    assert "1 new, 1 unchanged, 1 resolved" in out
 
 
 def test_cli_rejects_bad_baseline_before_scanning(tmp_path):
@@ -118,5 +118,5 @@ def test_sarif_and_markdown_carry_baseline_state(tmp_path):
     states = [r["baselineState"] for r in json.loads(to_sarif(annotated, meta))["runs"][0]["results"]]
     assert sorted(states) == ["new", "unchanged"]
     md = to_markdown(annotated, meta)
-    assert "## Comparação com baseline" in md and "**1 novo(s)**" in md and "| gone | high |" in md
-    assert "**NOVO**" in md
+    assert "## Baseline comparison" in md and "**1 new**" in md and "| gone | high |" in md
+    assert "**NEW**" in md

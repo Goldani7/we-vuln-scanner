@@ -1,8 +1,8 @@
-"""Camada HTTP assíncrona compartilhada por todos os checks.
+"""Async HTTP layer shared by every check.
 
-Centraliza o que um scan respeitoso precisa: limite de taxa, limite de concorrência, retries com
-backoff (respeitando Retry-After), proxy, headers/User-Agent customizados, classificação de erros
-(timeout, TLS, conexão) e um circuit breaker por host para não insistir num alvo que caiu.
+Centralizes what a well-behaved scan needs: rate limiting, concurrency limiting, retries with
+backoff (honoring Retry-After), proxy, custom headers/User-Agent, error classification (timeout,
+TLS, connection) and a per-host circuit breaker so it never keeps hammering a target that's down.
 """
 import asyncio
 import random
@@ -18,29 +18,29 @@ from . import __version__
 
 DEFAULT_USER_AGENT = f"web-vuln-scanner/{__version__}"
 RETRY_STATUSES = {429, 502, 503, 504}
-# Serviços públicos passivos consultados no lugar do alvo (não são o alvo, ficam fora do escopo).
+# Passive public services queried instead of the target (not the target itself; exempt from scope).
 PASSIVE_SERVICES = {"crt.sh"}
-CIRCUIT_THRESHOLD = 8  # falhas consecutivas num host antes de parar de tentar
+CIRCUIT_THRESHOLD = 8  # consecutive failures on a host before giving up on it
 
 
 @dataclass
 class ScanConfig:
     timeout: float = 10.0
-    rate: float = 10.0          # requisições por segundo no total (0 = sem limite)
+    rate: float = 10.0          # total requests per second (0 = unlimited)
     concurrency: int = 10
     retries: int = 2
-    proxy: str = None           # http://host:porta ou socks5://host:porta
+    proxy: str = None           # http://host:port or socks5://host:port
     headers: dict = field(default_factory=dict)
     user_agent: str = DEFAULT_USER_AGENT
     verify: bool = True
     max_backoff: float = 30.0
-    allow_active: bool = False  # libera checks intrusivos (CheckSpec.active)
-    scope: object = None        # scanner.scope.Scope; se definido, é imposto a TODA requisição
-    ports: list = None          # lista de portas para o portscan; None = tabela padrão
+    allow_active: bool = False  # unlocks intrusive checks (CheckSpec.active)
+    scope: object = None        # scanner.scope.Scope; if set, enforced on EVERY request
+    ports: list = None          # port list for portscan; None = default table
 
 
 class RequestFailed(Exception):
-    """Falha de rede classificada. `kind`: timeout | tls | connect | proxy | redirects |
+    """Classified network failure. `kind`: timeout | tls | connect | proxy | redirects |
     circuit_open | out_of_scope | network."""
 
     def __init__(self, kind: str, url: str, message: str):
@@ -79,7 +79,7 @@ def classify_error(exc: Exception, url: str) -> RequestFailed:
 
 
 class RateLimiter:
-    """Espaça as requisições em pelo menos 1/rate segundos."""
+    """Spaces requests at least 1/rate seconds apart."""
 
     def __init__(self, rate: float):
         self.interval = 1.0 / rate if rate and rate > 0 else 0.0
@@ -103,13 +103,13 @@ class HttpClient:
         self._limiter = RateLimiter(self.config.rate)
         self._sem = asyncio.Semaphore(max(1, self.config.concurrency))
         self._sleep = sleep
-        self._failures = {}  # host -> falhas consecutivas
+        self._failures = {}  # host -> consecutive failures
         self.stats = {"requests": 0, "retries": 0, "throttled": 0, "forbidden": 0, "failures": 0, "out_of_scope": 0}
         headers = {"User-Agent": self.config.user_agent, **self.config.headers}
         self._client = httpx.AsyncClient(
             headers=headers, proxy=self.config.proxy, verify=self.config.verify,
             timeout=self.config.timeout, transport=transport, follow_redirects=False,
-            # O hook roda a cada requisição, inclusive em cada salto de redirecionamento.
+            # The hook runs on every request, including each redirect hop.
             event_hooks={"request": [self._enforce_scope]},
         )
 
@@ -118,7 +118,7 @@ class HttpClient:
         if scope is not None and host not in PASSIVE_SERVICES and not scope.allows(host):
             self.stats["out_of_scope"] += 1
             raise RequestFailed("out_of_scope", str(request.url),
-                                f"{host} está fora do escopo ({scope.source or 'arquivo de escopo'}); requisição bloqueada")
+                                f"{host} is out of scope ({scope.source or 'scope file'}); request blocked")
 
     async def __aenter__(self):
         return self
@@ -145,25 +145,25 @@ class HttpClient:
         host = urlparse(url).hostname or url
         if self._failures.get(host, 0) >= CIRCUIT_THRESHOLD:
             raise RequestFailed("circuit_open", url,
-                                f"{host} falhou {CIRCUIT_THRESHOLD}x seguidas; requisições suspensas")
+                                f"{host} failed {CIRCUIT_THRESHOLD}x in a row; requests suspended")
         attempts = (self.config.retries if retries is None else retries) + 1
 
         for attempt in range(attempts):
             last_attempt = attempt + 1 >= attempts
             response, error = None, None
-            async with self._sem:  # o sleep de backoff fica fora do semáforo
+            async with self._sem:  # the backoff sleep stays outside the semaphore
                 await self._limiter.wait()
                 self.stats["requests"] += 1
                 try:
                     response = await self._client.request(
                         method, url, headers=headers, timeout=timeout or self.config.timeout,
                         follow_redirects=follow_redirects)
-                except RequestFailed:  # bloqueio de escopo: definitivo, sem retry nem circuit breaker
+                except RequestFailed:  # scope block: final, no retry and no circuit breaker
                     raise
                 except httpx.HTTPError as e:
                     error = classify_error(e, url)
                 except httpx.InvalidURL as e:
-                    raise RequestFailed("network", url, f"URL inválida: {e}") from e
+                    raise RequestFailed("network", url, f"invalid URL: {e}") from e
 
             if error is not None:
                 retryable = error.kind in ("timeout", "connect", "network")
@@ -185,11 +185,11 @@ class HttpClient:
                 continue
             self._failures[host] = 0
             return response
-        raise AssertionError("inalcançável")  # pragma: no cover
+        raise AssertionError("unreachable")  # pragma: no cover
 
 
 class ScanContext:
-    """O que cada check recebe: cliente HTTP, config e a resposta da página inicial (em cache)."""
+    """What every check receives: the HTTP client, the config, and the (cached) homepage response."""
 
     def __init__(self, url: str, client: HttpClient, config: ScanConfig):
         self.url, self.client, self.config = url, client, config

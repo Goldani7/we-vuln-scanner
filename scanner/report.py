@@ -1,4 +1,4 @@
-"""Geração de relatórios: texto, JSON versionado, Markdown, SARIF 2.1.0 e HTML."""
+"""Report generation: text, versioned JSON, Markdown, SARIF 2.1.0 and HTML."""
 import html
 import json
 from datetime import datetime, timezone
@@ -9,7 +9,7 @@ from .finding import Severity
 SCHEMA_VERSION = "1.0"
 SARIF_SCHEMA = "https://json.schemastore.org/sarif-2.1.0.json"
 ORDER = [Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM, Severity.LOW, Severity.INFO]
-# security-severity (0-10) é lido pelo GitHub Code Scanning para ordenar os alertas.
+# security-severity (0-10) is read by GitHub Code Scanning to rank alerts.
 SARIF_SCORE = {Severity.CRITICAL: "9.5", Severity.HIGH: "8.0", Severity.MEDIUM: "5.5",
                Severity.LOW: "3.0", Severity.INFO: "0.0"}
 SARIF_LEVEL = {Severity.CRITICAL: "error", Severity.HIGH: "error", Severity.MEDIUM: "warning",
@@ -28,35 +28,35 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-# ---------------------------------------------------------------------------------------- texto
+# ---------------------------------------------------------------------------------------- text
 
 def to_text(findings, show_info: bool = True, meta=None) -> str:
     lines = []
     for f in _sorted(findings):
         if f.severity is Severity.INFO and not show_info:
             continue
-        lines.append(f"[{f.severity.label}] {f.title}" + (" (NOVO)" if f.status == "new" else ""))
+        lines.append(f"[{f.severity.label}] {f.title}" + (" (NEW)" if f.status == "new" else ""))
         if f.detail:
             lines.append(f"    {f.detail}")
         if f.evidence:
             first = f.evidence.splitlines()
-            lines.append(f"    Evidência: {first[0]}" + (" …" if len(first) > 1 else ""))
+            lines.append(f"    Evidence: {first[0]}" + (" …" if len(first) > 1 else ""))
         if f.remediation:
-            lines.append(f"    Correção: {f.remediation}")
+            lines.append(f"    Fix: {f.remediation}")
     counts = summary(findings)
     lines.append("")
     base = (meta or {}).get("baseline")
     if base:
-        lines.append(f"Baseline ({base['file']}): {base['new']} novo(s), {base['unchanged']} inalterado(s), "
-                     f"{base['resolved']} resolvido(s)")
-    lines.append("Resumo: " + ", ".join(f"{s.label}={counts[s.value]}" for s in ORDER))
+        lines.append(f"Baseline ({base['file']}): {base['new']} new, {base['unchanged']} unchanged, "
+                     f"{base['resolved']} resolved")
+    lines.append("Summary: " + ", ".join(f"{s.label}={counts[s.value]}" for s in ORDER))
     return "\n".join(lines)
 
 
 # ----------------------------------------------------------------------------------------- JSON
 
 def to_json(findings, meta=None) -> str:
-    """Sem `meta`: lista de findings (formato da API). Com `meta`: relatório versionado."""
+    """Without `meta`: a plain list of findings (the API's format). With `meta`: a versioned report."""
     items = [f.to_dict() for f in _sorted(findings)]
     if meta is None:
         return json.dumps(items, ensure_ascii=False, indent=2)
@@ -81,56 +81,56 @@ def to_markdown(findings, meta=None, show_info: bool = True) -> str:
     meta = meta or {}
     counts = summary(findings)
     out = [
-        "# Relatório de segurança", "",
-        f"- **Alvo:** `{meta.get('target', '-')}`",
-        f"- **Modo:** {meta.get('mode', '-')}",
-        f"- **Gerado em:** {_now()}",
-        f"- **Ferramenta:** web-vuln-scanner {__version__}", "",
-        "## Resumo", "",
-        "| Severidade | Qtde |", "|---|---|",
+        "# Security Report", "",
+        f"- **Target:** `{meta.get('target', '-')}`",
+        f"- **Mode:** {meta.get('mode', '-')}",
+        f"- **Generated at:** {_now()}",
+        f"- **Tool:** web-vuln-scanner {__version__}", "",
+        "## Summary", "",
+        "| Severity | Count |", "|---|---|",
     ]
     out += [f"| {s.label} | {counts[s.value]} |" for s in ORDER]
     base = meta.get("baseline")
     if base:
-        out += ["", "## Comparação com baseline", "",
-                f"Baseline: `{base['file']}` · **{base['new']} novo(s)** · {base['unchanged']} inalterado(s) · "
-                f"{base['resolved']} resolvido(s)"]
+        out += ["", "## Baseline comparison", "",
+                f"Baseline: `{base['file']}` · **{base['new']} new** · {base['unchanged']} unchanged · "
+                f"{base['resolved']} resolved"]
         if base["resolved_findings"]:
-            out += ["", "| Resolvido | Severidade |", "|---|---|"]
+            out += ["", "| Resolved | Severity |", "|---|---|"]
             out += [f"| {_md_escape_cell(r['title'])} | {r['severity']} |" for r in base["resolved_findings"]]
     actionable = [f for f in _sorted(findings) if f.severity is not Severity.INFO]
     if actionable:
-        out += ["", "## Achados por prioridade", "",
-               "| # | Severidade | Achado | Potencial de exploração | Confiança |", "|---|---|---|---|---|"]
+        out += ["", "## Findings by priority", "",
+               "| # | Severity | Finding | Exploitability | Confidence |", "|---|---|---|---|---|"]
         out += [f"| {i} | {f.severity.label} | {_md_escape_cell(f.title)} | {f.exploitability_label} | "
                 f"{f.confidence} |" for i, f in enumerate(actionable, 1)]
-    out += ["", "## Detalhes"]
+    out += ["", "## Details"]
     n = 0
     for f in _sorted(findings):
         if f.severity is Severity.INFO and not show_info:
             continue
         n += 1
         out += ["", f"### {n}. [{f.severity.label}] {f.title}", "",
-                f"`{f.rule}` · módulo `{f.check}` · confiança **{f.confidence}**"
+                f"`{f.rule}` · module `{f.check}` · confidence **{f.confidence}**"
                 + (f" · {f.cwe}" if f.cwe else "") + f" · id `{f.fingerprint}`"
-                + (" · **NOVO**" if f.status == "new" else "")]
+                + (" · **NEW**" if f.status == "new" else "")]
         if f.detail:
             out += ["", f.detail]
         if f.evidence:
-            out += ["", "**Evidência**", "", "```text", f.evidence.replace("```", "'''"), "```"]
+            out += ["", "**Evidence**", "", "```text", f.evidence.replace("```", "'''"), "```"]
         if f.remediation:
-            out += ["", f"**Correção:** {f.remediation}"]
+            out += ["", f"**Fix:** {f.remediation}"]
         if f.references:
-            out += ["", "**Referências:** " + ", ".join(f"<{r}>" for r in f.references)]
+            out += ["", "**References:** " + ", ".join(f"<{r}>" for r in f.references)]
     out += ["", "---", "",
-            "*Use apenas em alvos autorizados. Esta ferramenta não substitui um pentest profissional.*"]
+            "*Use only against authorized targets. This tool is not a substitute for a professional pentest.*"]
     return "\n".join(out)
 
 
 # ----------------------------------------------------------------------------------------- SARIF
 
 def to_sarif(findings, meta=None) -> str:
-    """SARIF 2.1.0. Achados INFO (confirmações positivas) ficam de fora."""
+    """SARIF 2.1.0. INFO findings (positive confirmations) are left out."""
     meta = meta or {}
     items = [f for f in _sorted(findings) if f.severity is not Severity.INFO]
     rules, rule_index = [], {}
@@ -155,9 +155,9 @@ def to_sarif(findings, meta=None) -> str:
     for f in items:
         text = f.title + (f" — {f.detail}" if f.detail else "")
         if f.evidence:
-            text += f"\nEvidência: {f.evidence}"
+            text += f"\nEvidence: {f.evidence}"
         if f.remediation:
-            text += f"\nCorreção: {f.remediation}"
+            text += f"\nFix: {f.remediation}"
         results.append({
             "ruleId": f.rule,
             "ruleIndex": rule_index[f.rule],
@@ -201,17 +201,17 @@ pre{background:#f6f8fa;padding:.5rem;border-radius:4px;overflow-x:auto;font-size
 
 
 def to_html(findings, meta=None, show_info: bool = True) -> str:
-    """Relatório HTML autocontido. Todo conteúdo vindo do alvo é escapado (anti-XSS)."""
+    """Self-contained HTML report. All target-controlled content is escaped (anti-XSS)."""
     meta = meta or {}
     esc = html.escape
     counts = summary(findings)
     parts = [
-        "<!DOCTYPE html><html lang=\"pt-BR\"><head><meta charset=\"utf-8\">",
-        "<title>Relatório de segurança</title>",
+        "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">",
+        "<title>Security Report</title>",
         f"<style>{_CSS}</style></head><body>",
-        "<h1>Relatório de segurança</h1>",
-        f"<div class=\"meta\">Alvo: <strong>{esc(str(meta.get('target', '-')))}</strong> · "
-        f"modo: {esc(str(meta.get('mode', '-')))} · gerado em {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}</div>",
+        "<h1>Security Report</h1>",
+        f"<div class=\"meta\">Target: <strong>{esc(str(meta.get('target', '-')))}</strong> · "
+        f"mode: {esc(str(meta.get('mode', '-')))} · generated at {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}</div>",
         "<div class=\"summary\">",
     ]
     for s in ORDER:
@@ -221,16 +221,16 @@ def to_html(findings, meta=None, show_info: bool = True) -> str:
         if f.severity is Severity.INFO and not show_info:
             continue
         parts.append(f"<div class=\"finding {f.severity.value}\">")
-        parts.append(f"<span class=\"check\">{esc(f.rule)} · {f.severity.label} · confiança {esc(f.confidence)}"
-                     + (f" · {esc(f.cwe)}" if f.cwe else "") + (" · novo" if f.status == "new" else "") + "</span>")
+        parts.append(f"<span class=\"check\">{esc(f.rule)} · {f.severity.label} · confidence {esc(f.confidence)}"
+                     + (f" · {esc(f.cwe)}" if f.cwe else "") + (" · new" if f.status == "new" else "") + "</span>")
         parts.append(f"<h3>{esc(f.title)}</h3>")
         if f.detail:
             parts.append(f"<div>{esc(f.detail)}</div>")
         if f.evidence:
             parts.append(f"<pre>{esc(f.evidence)}</pre>")
         if f.remediation:
-            parts.append(f"<div class=\"rec\">Correção: {esc(f.remediation)}</div>")
+            parts.append(f"<div class=\"rec\">Fix: {esc(f.remediation)}</div>")
         parts.append("</div>")
-    parts.append("<footer>Use apenas em alvos autorizados. Esta ferramenta não substitui um pentest "
-                 "profissional.</footer></body></html>")
+    parts.append("<footer>Use only against authorized targets. This tool is not a substitute for a "
+                 "professional pentest.</footer></body></html>")
     return "\n".join(parts)

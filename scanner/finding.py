@@ -4,7 +4,7 @@ from enum import Enum
 
 
 class Severity(Enum):
-    """Valores em inglês e estáveis: são o contrato dos formatos JSON/SARIF e da API."""
+    """Stable English values: these are the contract for the JSON/SARIF formats and the API."""
     INFO = "info"
     LOW = "low"
     MEDIUM = "medium"
@@ -17,19 +17,19 @@ class Severity(Enum):
 
     @property
     def label(self) -> str:
-        """Rótulo em português para relatórios legíveis."""
-        return {"info": "INFO", "low": "BAIXO", "medium": "MÉDIO",
-                "high": "ALTO", "critical": "CRÍTICO"}[self.value]
+        """Display label for human-readable reports."""
+        return {"info": "INFO", "low": "LOW", "medium": "MEDIUM",
+                "high": "HIGH", "critical": "CRITICAL"}[self.value]
 
 
 @dataclass
 class Finding:
-    """Um achado acionável.
+    """An actionable finding.
 
-    Os seis primeiros campos são posicionais e mantêm a ordem original; os demais enriquecem o
-    achado para o pentester: `evidence` (o que foi observado, com segredos mascarados),
-    `cwe`/`references` (classificação), `confidence` (probabilidade de ser verdadeiro positivo)
-    e `target` (preenchido pelo orquestrador).
+    The first six fields are positional and keep their original order; the rest enrich the
+    finding for the pentester: `evidence` (what was observed, with secrets masked),
+    `cwe`/`references` (classification), `confidence` (likelihood of being a true positive)
+    and `target` (filled in by the orchestrator).
     """
     check: str
     severity: Severity
@@ -43,7 +43,7 @@ class Finding:
     confidence: str = "medium"  # low | medium | high
     rule_id: str = ""
     target: str = ""
-    status: str = ""  # "new" | "unchanged" quando comparado com --baseline
+    status: str = ""  # "new" | "unchanged" when compared against --baseline
 
     @property
     def rule(self) -> str:
@@ -51,25 +51,26 @@ class Finding:
 
     @property
     def exploitability(self) -> str:
-        """Slug derivado de severity+confidence: o quanto este achado, por si só, sugere um caminho
-        de exploração real (em vez de só enfraquecer defesas). Nunca é mais confiável que a
-        confiança do achado: um CRITICAL com confidence 'low' não sai como 'alto' sem checagem."""
+        """Slug derived from severity+confidence: how much this finding, on its own, suggests a
+        real exploitation path (rather than just weakening defenses). Never more confident than
+        the finding's own confidence: a CRITICAL with confidence 'low' never comes out as 'high'
+        without verification."""
         if self.severity is Severity.INFO:
-            return "informativo"
+            return "informational"
         if self.severity.rank >= Severity.HIGH.rank and self.confidence in ("high", "medium"):
-            return "alto"
+            return "high"
         if self.severity.rank >= Severity.MEDIUM.rank:
-            return "moderado"
-        return "baixo"
+            return "moderate"
+        return "low"
 
     @property
     def exploitability_label(self) -> str:
-        return {"alto": "Alto (exploração provável)", "moderado": "Moderado — valide manualmente",
-               "baixo": "Baixo / hardening", "informativo": "Informativo"}[self.exploitability]
+        return {"high": "High (likely exploitable)", "moderate": "Moderate — verify manually",
+               "low": "Low / hardening", "informational": "Informational"}[self.exploitability]
 
     @property
     def fingerprint(self) -> str:
-        """Identificador estável para deduplicar achados entre execuções."""
+        """Stable identifier used to deduplicate findings across runs."""
         raw = f"{self.rule}|{self.title}|{self.target}"
         return hashlib.sha256(raw.encode()).hexdigest()[:16]
 

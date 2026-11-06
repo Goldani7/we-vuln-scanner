@@ -23,7 +23,7 @@ NVD_PAYLOAD = {"vulnerabilities": [
              "descriptions": [{"lang": "es", "value": "x"}, {"lang": "en", "value": "Bug grave"}],
              "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 9.8}}]}}},
     {"cve": {"id": "CVE-2021-0002",
-             "descriptions": [{"lang": "en", "value": "Bug médio"}],
+             "descriptions": [{"lang": "en", "value": "Medium bug"}],
              "metrics": {"cvssMetricV2": [{"cvssData": {"baseScore": 5.0}}]}}},
     {"cve": {"id": "CVE-2021-0003",
              "descriptions": [{"lang": "en", "value": "Bug leve"}], "metrics": {}}},
@@ -114,13 +114,13 @@ def _scan_with_intel(intel, warnings=()):
 
 
 def test_kev_cve_becomes_critical_with_evidence_and_urgent_remediation():
-    # CVE-2021-0002 tem CVSS 5.0 (médio), mas está na KEV com EPSS alto
+    # CVE-2021-0002 has CVSS 5.0 (medium), but is in the KEV with high EPSS
     intel = {"CVE-2021-0002": {"kev": KEV_ENTRY, "epss": 0.97, "percentile": 0.999}}
     f = next(x for x in _scan_with_intel(intel) if x.metadata.get("cve") == "CVE-2021-0002")
-    assert f.severity is Severity.HIGH  # CVSS médio + KEV => no mínimo ALTO
+    assert f.severity is Severity.HIGH  # medium CVSS + KEV => at least HIGH
     assert "CISA KEV" in f.title and "EPSS 97.0%" in f.title
-    assert "exploração ativa confirmada" in f.evidence and "ransomware: Known" in f.evidence
-    assert f.remediation.startswith("PRIORIDADE MÁXIMA")
+    assert "confirmed active exploitation" in f.evidence and "ransomware use: Known" in f.evidence
+    assert f.remediation.startswith("TOP PRIORITY")
     assert f.metadata["kev"] is True and f.metadata["epss"] == 0.97
     assert f.confidence == "medium"  # produto da KEV (nginx) bate com a tecnologia detectada
 
@@ -145,8 +145,8 @@ def test_findings_are_ordered_by_exploitation_risk_not_cvss():
 
 
 def test_intel_failure_is_reported_and_cvss_severity_is_kept():
-    findings = _scan_with_intel({}, ["EPSS indisponível: timeout"])
+    findings = _scan_with_intel({}, ["EPSS unavailable: timeout"])
     notice = [f for f in findings if f.rule == "tech.intel-unavailable"]
-    assert notice and "EPSS indisponível" in notice[0].detail
+    assert notice and "EPSS unavailable" in notice[0].detail
     assert [f.severity for f in findings if "cve" in f.metadata] == [
         Severity.CRITICAL, Severity.MEDIUM, Severity.LOW]

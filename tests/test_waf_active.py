@@ -23,7 +23,7 @@ def test_confirmed_when_baseline_ok_and_probe_blocked():
         return httpx.Response(200, text="home")
     f = rules(run_check(check_waf_active, handler))["waf_active.confirmed"]
     assert f.severity is Severity.INFO and f.confidence == "high"
-    assert "Cloudflare" in f.metadata["vendors"] and "WAF ativo confirmado (Cloudflare)" in f.title
+    assert "Cloudflare" in f.metadata["vendors"] and "Active WAF confirmed (Cloudflare)" in f.title
     assert "GET https://ex.com/ → HTTP 200" in f.evidence
 
 
@@ -31,7 +31,7 @@ def test_confirmed_without_identifiable_vendor():
     def handler(request):
         return httpx.Response(406 if PROBE_PARAM in str(request.url) else 200)
     f = rules(run_check(check_waf_active, handler))["waf_active.confirmed"]
-    assert f.metadata["vendors"] == [] and f.title == "WAF ativo confirmado"
+    assert f.metadata["vendors"] == [] and f.title == "Active WAF confirmed"
 
 
 def test_no_block_observed_is_low_confidence_info():

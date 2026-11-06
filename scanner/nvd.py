@@ -1,8 +1,8 @@
-"""Cliente mínimo da NVD API 2.0 (NIST) com cache em disco.
+"""Minimal NVD API 2.0 (NIST) client with an on-disk cache.
 
-Consulta CVEs por palavra-chave (tecnologia + versão). A NVD_API_KEY é opcional:
-sem ela a API funciona, mas com limite menor (~5 req/30s; com key, ~50 req/30s).
-Chave gratuita: https://nvd.nist.gov/developers/request-an-api-key
+Looks up CVEs by keyword (technology + version). NVD_API_KEY is optional: the API works
+without it, just with a lower limit (~5 req/30s; ~50 req/30s with a key).
+Free key: https://nvd.nist.gov/developers/request-an-api-key
 """
 import json
 import os
@@ -12,12 +12,12 @@ from pathlib import Path
 import requests
 
 NVD_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
-CACHE_TTL = 7 * 24 * 3600  # 7 dias
+CACHE_TTL = 7 * 24 * 3600  # 7 days
 MAX_RESULTS = 20
 
 
 class NVDError(Exception):
-    """Falha ao consultar a NVD (rede, rate limit, timeout, resposta inválida)."""
+    """Failed to query the NVD (network, rate limit, timeout, invalid response)."""
 
 
 def _cache_path() -> Path:
@@ -40,7 +40,7 @@ def _save_cache(cache: dict) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(cache), encoding="utf-8")
     except OSError:
-        pass  # cache é só otimização; nunca quebrar o scan por isso
+        pass  # the cache is only an optimization; never break the scan over it
 
 
 def _base_score(cve: dict):
@@ -52,7 +52,7 @@ def _base_score(cve: dict):
 
 
 def parse_cves(payload: dict) -> list:
-    """Converte a resposta da NVD em [{id, score, description, url}], maior score primeiro."""
+    """Converts the NVD response into [{id, score, description, url}], highest score first."""
     results = []
     for item in payload.get("vulnerabilities", []):
         cve = item.get("cve", {})

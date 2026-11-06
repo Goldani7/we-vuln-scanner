@@ -1,10 +1,10 @@
-"""Detecção de tecnologia exposta e CVEs conhecidas.
+"""Exposed technology detection and known CVEs.
 
-Vulnerabilidade: headers como Server/X-Powered-By revelam software e versão (fingerprinting),
-ajudando o atacante a escolher exploits para CVEs publicadas daquela versão.
-Exemplo: "Server: Apache/2.4.49" permite ao atacante tentar a CVE-2021-41773 (path traversal/RCE).
+Vulnerability: headers like Server/X-Powered-By reveal software and version (fingerprinting),
+helping the attacker pick exploits for published CVEs of that version.
+Example: "Server: Apache/2.4.49" lets the attacker try CVE-2021-41773 (path traversal/RCE).
 Ref.: OWASP WSTG-INFO-02 (Fingerprint Web Server); CWE-200 (Exposure of Sensitive Information).
-Aqui as CVEs são consultadas na NVD (scanner/nvd.py); se falhar, usa-se uma tabela local mínima.
+CVEs here are looked up in the NVD (scanner/nvd.py); on failure, a minimal local table is used.
 """
 import re
 
@@ -13,7 +13,7 @@ from ..finding import Finding, Severity
 
 CHECK = "tech_detection"
 
-# Fallback offline: tecnologia -> versão mínima considerada atualizada
+# Offline fallback: technology -> minimum version considered up to date
 MIN_VERSIONS = {"apache": "2.4.50", "nginx": "1.20.0", "php": "8.0"}
 MAX_CVES_PER_TECH = 10
 
@@ -25,7 +25,7 @@ def _parse(version: str) -> tuple:
 
 
 def severity_from_cvss(score) -> Severity:
-    """Faixas CVSS v3: 9.0+ crítico, 7.0+ alto, 4.0+ médio, abaixo disso baixo."""
+    """CVSS v3 bands: 9.0+ critical, 7.0+ high, 4.0+ medium, below that low."""
     if score is None:
         return Severity.LOW
     if score >= 9:
@@ -41,9 +41,9 @@ def _local_fallback(tech: str, version: str) -> list:
     minimum = MIN_VERSIONS.get(tech.lower())
     if minimum and _parse(version) < _parse(minimum):
         return [Finding(
-            CHECK, Severity.MEDIUM, f"{tech} possivelmente desatualizado ({version})",
-            f"Versão detectada {version} é anterior a {minimum} (tabela local).",
-            f"Atualize {tech} para uma versão suportada.",
+            CHECK, Severity.MEDIUM, f"{tech} possibly outdated ({version})",
+            f"Detected version {version} is older than {minimum} (local table).",
+            f"Update {tech} to a supported version.",
             {"tech": tech, "version": version, "minimum": minimum},
         )]
     return []
@@ -54,9 +54,9 @@ def _cve_findings(tech: str, version: str) -> list:
         cves = nvd.query_cves(tech, version)
     except nvd.NVDError as e:
         findings = [Finding(
-            CHECK, Severity.INFO, "Consulta online à NVD falhou; usando tabela local",
-            f"Não foi possível consultar a NVD para {tech} {version}: {e}",
-            "Tente novamente mais tarde ou configure NVD_API_KEY.",
+            CHECK, Severity.INFO, "Online NVD lookup failed; using the local table",
+            f"Could not query the NVD for {tech} {version}: {e}",
+            "Try again later or set NVD_API_KEY.",
             {"tech": tech, "version": version},
         )]
         return findings + _local_fallback(tech, version)
@@ -70,15 +70,15 @@ def _cve_findings(tech: str, version: str) -> list:
         findings.append(_cve_finding(cve, tech, version, intel.get(cve["id"].upper()) or {}))
     if warnings:
         findings.append(Finding(
-            CHECK, Severity.INFO, "Priorização por EPSS/CISA KEV incompleta",
-            "; ".join(warnings) + ". As severidades abaixo refletem apenas o CVSS.",
-            "Verifique a conectividade ou defina WVS_THREAT_INTEL=0 para executar offline.",
+            CHECK, Severity.INFO, "EPSS/CISA KEV prioritization incomplete",
+            "; ".join(warnings) + ". The severities below reflect CVSS only.",
+            "Check connectivity, or set WVS_THREAT_INTEL=0 to run offline.",
             rule_id="tech.intel-unavailable"))
     return findings
 
 
 def _pct(value: float) -> str:
-    """Percentual legível: 0.99992 vira '>99.9%' em vez de arredondar para 100%."""
+    """Readable percentage: 0.99992 becomes '>99.9%' instead of rounding to 100%."""
     return ">99.9%" if value > 0.999 else f"{value:.1%}"
 
 
@@ -86,32 +86,32 @@ def _cve_finding(cve: dict, tech: str, version: str, intel: dict) -> Finding:
     score, kev, epss = cve["score"], intel.get("kev"), intel.get("epss")
     severity = threatintel.prioritize(severity_from_cvss(score), bool(kev), epss)
 
-    badges = [f"CVSS {score}" if score is not None else "CVSS n/d"]
+    badges = [f"CVSS {score}" if score is not None else "CVSS n/a"]
     if epss is not None:
         badges.append(f"EPSS {_pct(epss)}")
     if kev:
         badges.append("CISA KEV")
 
-    evidence = [f"{tech}/{version} (via header) casou com {cve['id']} por busca de palavra-chave na NVD"]
+    evidence = [f"{tech}/{version} (from header) matched {cve['id']} via keyword search on the NVD"]
     if kev:
         evidence.append(
-            f"CISA KEV: exploração ativa confirmada (adicionado em {kev['dateAdded']}, prazo de correção "
-            f"{kev['dueDate']}, uso em ransomware: {kev['knownRansomwareCampaignUse']}). "
-            f"Produto: {kev['vendorProject']} {kev['product']}")
+            f"CISA KEV: confirmed active exploitation (added {kev['dateAdded']}, due date "
+            f"{kev['dueDate']}, ransomware use: {kev['knownRansomwareCampaignUse']}). "
+            f"Product: {kev['vendorProject']} {kev['product']}")
     if epss is not None:
-        evidence.append(f"EPSS: {_pct(epss)} de chance de exploração em 30 dias "
-                        f"(percentil {_pct(intel['percentile'])})")
+        evidence.append(f"EPSS: {_pct(epss)} chance of exploitation within 30 days "
+                        f"(percentile {_pct(intel['percentile'])})")
 
-    # A KEV confirma que o CVE é explorado, mas não que ESTA instância é afetada. Se o produto da KEV
-    # bate com a tecnologia detectada, a correspondência é mais confiável.
+    # The KEV confirms the CVE is exploited, but not that THIS instance is affected. If the KEV's
+    # product matches the detected technology, the match is more reliable.
     product_match = bool(kev) and tech.lower() in f"{kev['vendorProject']} {kev['product']}".lower()
-    remediation = f"Atualize {tech} para uma versão sem esta vulnerabilidade."
+    remediation = f"Update {tech} to a version without this vulnerability."
     if kev:
-        remediation = (f"PRIORIDADE MÁXIMA (explorado ativamente): {kev['requiredAction']} "
-                       f"Confirme a versão instalada e atualize {tech}.")
+        remediation = (f"TOP PRIORITY (actively exploited): {kev['requiredAction']} "
+                       f"Confirm the installed version and update {tech}.")
     return Finding(
-        CHECK, severity, f"{cve['id']} ({', '.join(badges)}) em {tech} {version}",
-        f"{cve['description']} Detalhes: {cve['url']}", remediation,
+        CHECK, severity, f"{cve['id']} ({', '.join(badges)}) in {tech} {version}",
+        f"{cve['description']} Details: {cve['url']}", remediation,
         {"cve": cve["id"], "cvss": score, "url": cve["url"], "tech": tech, "version": version,
          "kev": bool(kev), "epss": epss, "epss_percentile": intel.get("percentile")},
         evidence="\n".join(evidence), references=[cve["url"]] + (
@@ -126,14 +126,14 @@ def check_tech_detection(response) -> list:
         if not value:
             continue
         findings.append(Finding(
-            CHECK, Severity.LOW, f"Header {header} expõe tecnologia",
+            CHECK, Severity.LOW, f"Header {header} exposes technology",
             f"{header}: {value}",
-            "Oculte ou genericize este header para reduzir fingerprinting.",
+            "Hide or genericize this header to reduce fingerprinting.",
             {"header": header, "value": value},
             evidence=f"{header}: {value}", cwe="CWE-200", confidence="high", rule_id="tech.exposed-header",
         ))
         for tech, version in _TECH_RE.findall(value):
             findings.extend(_cve_findings(tech, version))
     if not findings:
-        findings.append(Finding(CHECK, Severity.INFO, "Nenhuma tecnologia exposta nos headers"))
+        findings.append(Finding(CHECK, Severity.INFO, "No technology exposed in the headers"))
     return findings
