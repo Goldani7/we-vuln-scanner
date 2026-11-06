@@ -25,7 +25,8 @@ NVD_PAYLOAD = {"vulnerabilities": [
 
 
 @pytest.mark.parametrize("score,sev", [
-    (9.8, Severity.HIGH), (9.0, Severity.HIGH), (7.5, Severity.MEDIUM),
+    (9.8, Severity.CRITICAL), (9.0, Severity.CRITICAL), (8.9, Severity.HIGH), (7.0, Severity.HIGH),
+    (6.9, Severity.MEDIUM),
     (4.0, Severity.MEDIUM), (3.9, Severity.LOW), (None, Severity.LOW),
 ])
 def test_severity_mapping(score, sev):
@@ -46,9 +47,10 @@ def test_cve_findings_from_nvd():
         findings = check_tech_detection(FakeResponse({"Server": "nginx/1.18.0 (Ubuntu)"}))
     q.assert_called_once_with("nginx", "1.18.0")
     cve_f = [f for f in findings if "cve" in f.metadata]
-    assert [f.severity for f in cve_f] == [Severity.HIGH, Severity.MEDIUM, Severity.LOW]
+    assert [f.severity for f in cve_f] == [Severity.CRITICAL, Severity.MEDIUM, Severity.LOW]
     assert "CVE-2021-0001" in cve_f[0].title
     assert "https://nvd.nist.gov/vuln/detail/CVE-2021-0001" in cve_f[0].detail
+    assert cve_f[0].confidence == "low" and "nginx/1.18.0" in cve_f[0].evidence
 
 
 def test_graceful_fallback_when_nvd_fails():

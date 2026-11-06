@@ -33,7 +33,7 @@ def test_scan_returns_findings():
     with patch("api.main.scan", return_value=fake) as mock_scan:
         r = client.post("/scan", json={"url": "https://8.8.8.8", "checks": ["headers"]})
     assert r.status_code == 200
-    assert r.json()[0]["severity"] == "alto"
+    assert r.json()[0]["severity"] == "high"
     mock_scan.assert_called_once_with("https://8.8.8.8", checks=["headers"])
 
 

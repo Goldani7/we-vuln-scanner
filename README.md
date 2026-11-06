@@ -10,18 +10,35 @@ Use esta ferramenta **somente em sistemas que você possui ou para os quais tem 
 
 | Módulo | O que verifica |
 |---|---|
-| `headers` | Presença de CSP, HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy |
-| `cookies` | Flags Secure, HttpOnly e SameSite |
-| `tech_detection` | Exposição de `Server`/`X-Powered-By` e CVEs reais da versão detectada (NVD/NIST), com fallback para tabela local |
-| `ssl_tls` | Versão do protocolo TLS e validade/expiração do certificado |
-| `cors` | Configuração de CORS permissiva ou que reflete origens arbitrárias |
-| `exposed_files` | Arquivos sensíveis comuns acessíveis (`/.env`, `/.git/config`, `/admin`, `/robots.txt`, etc.), com proteção contra falsos positivos de *soft-404* |
+| `headers` | Avalia o **valor**, não só a presença: CSP com `unsafe-inline`/curingas, HSTS com `max-age` curto ou sem `includeSubDomains`, `X-Frame-Options` inválido (considera `frame-ancestors`), `nosniff`, `Referrer-Policy` insegura, COOP/CORP, vazamento de versão (`X-AspNet-Version`) |
+| `cookies` | Flags Secure, HttpOnly e SameSite, priorizando cookies com nome de sessão/autenticação. O valor do cookie nunca vai para o relatório |
+| `tech_detection` | Exposição de `Server`/`X-Powered-By` e CVEs da versão detectada (NVD/NIST), com fallback para tabela local. Os CVEs vêm de busca por palavra-chave, então têm `confidence: low`: valide a versão afetada |
+| `ssl_tls` | Protocolo negociado, **versões TLS aceitas** (sonda TLS 1.0/1.1/1.2/1.3) e validade/expiração do certificado |
+| `cors` | Origem arbitrária refletida, `Origin: null` e `*` com credenciais, com severidade conforme o impacto real |
+| `exposed_files` | ~25 caminhos sensíveis (`.env`, `.git`, dumps SQL, chaves SSH, backups, Actuator, phpinfo...). **O conteúdo é validado por assinatura** (um 200 não basta), há baseline anti-soft-404 e **segredos são mascarados** na evidência |
+| `misconfig` | HTTP sem redirecionar para HTTPS, `TRACE` habilitado (confirmado por eco), métodos de escrita em `Allow`, listagem de diretório, stack traces/debug em páginas de erro, `security.txt` |
+| `subdomains` | Enumeração **passiva** via Certificate Transparency (crt.sh), resolução DNS, e alertas para nomes como `staging`/`admin`/`vpn` e subdomínios públicos apontando para IPs privados |
 | `spf` | Existência, sintaxe básica, política final (`-all`/`~all`/`+all`) e limite de 10 consultas DNS |
-| `dkim` | Seletores comuns publicados (`default`, `google`, `selector1`...) e chaves revogadas. Não conclusivo quando nada é achado: seletores personalizados não são enumeráveis |
+| `dkim` | Seletores comuns publicados e chaves revogadas. Não conclusivo quando nada é achado: seletores personalizados não são enumeráveis |
 | `dmarc` | Presença e política (`none`/`quarantine`/`reject`), `pct` e endereço de relatórios (`rua`) |
 | `dnsbl` | Servidores de e-mail (MX) e domínio nas listas Spamhaus, SpamCop e Barracuda |
 
-Os checks web rodam em paralelo (`ThreadPoolExecutor`), e uma falha inesperada em um check vira um finding informativo em vez de derrubar o scan.
+Todos os requests web passam por um cliente `httpx` assíncrono único (`scanner/http.py`) e uma falha em um check vira um finding informativo em vez de derrubar o scan.
+
+## Achados acionáveis
+
+Cada achado traz:
+
+| Campo | Significado |
+|---|---|
+| `severity` | `critical`, `high`, `medium`, `low` ou `info` |
+| `evidence` | O que foi observado (header, trecho de resposta, requisição). Segredos são mascarados |
+| `remediation` | Passo concreto de correção |
+| `cwe`, `references` | Classificação e links (OWASP, NVD...) |
+| `confidence` | `high`, `medium` ou `low`: chance de ser um verdadeiro positivo. Achados `low` pedem validação manual |
+| `rule_id`, `fingerprint` | Identificador da regra e hash estável para deduplicar entre execuções |
+
+Critério de severidade: **critical** = segredo ou dado sensível comprovadamente acessível (`.env` com credenciais, chave privada, dump SQL, CVSS ≥ 9); **high** = exploração direta provável (CORS com credenciais, `.git` exposto, listagem com arquivos sensíveis, CVSS 7-8,9); **medium** = enfraquece defesas ou vaza informação útil (CSP ausente, sem redirect HTTPS, TRACE); **low** = hardening; **info** = confirmações e contexto.
 
 ## Instalação
 
@@ -36,31 +53,64 @@ Requer Python 3.10+.
 ## Uso
 
 ```bash
-# Tudo (web + e-mail/DNS): aceita URL ou domínio
+# Tudo (web + e-mail/DNS + subdomínios): aceita URL ou domínio
 python -m scanner.cli -t https://exemplo.com
 
-# Só o módulo web / só e-mail e domínio
+# Só um módulo: web, email ou recon (subdomínios)
 python -m scanner.cli -t https://exemplo.com -m web
 python -m scanner.cli -t exemplo.com -m email
+python -m scanner.cli -t exemplo.com -m recon
 
-# Relatório em arquivo: o formato vem da extensão (.json ou .html)
+# Relatórios: o formato vem da extensão
+python -m scanner.cli -t exemplo.com -o relatorio.md      # Markdown para o relatório de pentest
+python -m scanner.cli -t exemplo.com -o resultado.json    # JSON versionado (schema_version)
+python -m scanner.cli -t exemplo.com -o resultado.sarif   # SARIF 2.1.0
 python -m scanner.cli -t exemplo.com -o relatorio.html
-python -m scanner.cli -t exemplo.com -o relatorio.json
 
-# Subconjunto de checks web, sem findings informativos, com logs de depuração
-python -m scanner.cli -t https://exemplo.com -m web --checks headers,cookies --no-info -v
+# Pentest com cuidado: ritmo baixo, proxy do Burp, identificação do engajamento
+python -m scanner.cli -t https://cliente.com -m web --rate 2 --concurrency 4 \
+    --proxy http://127.0.0.1:8080 --user-agent "ACME-Pentest/1.0" -H "X-Engagement: ACME-42"
 ```
 
 | Opção | Descrição |
 |---|---|
 | `-t`, `--target` | URL ou domínio alvo (também aceito como argumento posicional) |
-| `-m`, `--mode` | `web`, `email` ou `full` (padrão) |
-| `-o`, `--output` | Arquivo do relatório; `.json` ou `.html` |
-| `-f`, `--format` | `text`, `json` ou `html` (sobrescreve a extensão; sem `-o`, imprime no console) |
-| `-v`, `--verbose` | Logs de depuração em stderr |
-| `--checks`, `--no-info`, `--timeout` | Checks web a executar, ocultar INFO, timeout em segundos |
+| `-m`, `--mode` | `web`, `email`, `recon` ou `full` (padrão) |
+| `-o`, `--output` | Arquivo do relatório (`.json`, `.md`, `.sarif`, `.html`) |
+| `-f`, `--format` | `text`, `json`, `md`, `sarif` ou `html` (sobrescreve a extensão; sem `-o`, imprime no console) |
+| `--fail-on` | `critical`, `high` (padrão), `medium`, `low` ou `none`: severidade mínima para sair com código 2 (CI) |
+| `--checks`, `--no-info`, `-v` | Checks web a executar, ocultar INFO, logs de depuração |
 
-Código de saída `2` se houver algum finding de severidade alta; caso contrário `0`.
+**Rede e desempenho:**
+
+| Opção | Descrição |
+|---|---|
+| `--rate` | Máximo de requisições por segundo no total (padrão 10; `0` = sem limite) |
+| `--concurrency` | Requisições simultâneas (padrão 10) |
+| `--retries` | Retentativas em timeout/429/502-504, com backoff exponencial e respeito a `Retry-After` (padrão 2) |
+| `--timeout` | Timeout por requisição em segundos (padrão 10) |
+| `--proxy` | `http://host:porta` ou `socks5://host:porta` |
+| `-H`, `--header` | Header extra em todas as requisições (repetível) |
+| `--user-agent` | Padrão: `web-vuln-scanner/<versão>`, que identifica a ferramenta |
+| `--insecure` | Não valida o certificado do alvo (só diagnóstico) |
+
+Se o alvo responde 429 ou falha repetidamente, o scan **não insiste**: há retry com backoff, um circuit breaker por host e um achado informando que os resultados podem estar incompletos (reduza `--rate`). Timeouts, erros TLS e conexão recusada viram achados classificados, nunca um traceback.
+
+Limitações: o `--proxy` cobre as requisições HTTP ao alvo e à crt.sh; a resolução DNS (subdomínios, SPF/DKIM/DMARC) e a consulta à NVD usam a rede direta.
+
+### Integração com CI/CD
+
+```yaml
+# GitHub Actions: falha o job com achados HIGH+ e publica o SARIF
+- run: python -m scanner.cli -t https://staging.exemplo.com -m web -o resultado.sarif --fail-on high
+- uses: github/codeql-action/upload-sarif@v3
+  if: always()
+  with: { sarif_file: resultado.sarif }
+```
+
+O SARIF omite achados `info`. Como o alvo é uma URL e não um arquivo do repositório, o GitHub mostra o alerta sem link para linha de código.
+
+Use `fingerprint` (também em `partialFingerprints` do SARIF) para comparar execuções e alertar só sobre achados novos.
 
 ## API web (FastAPI)
 
@@ -72,7 +122,7 @@ curl -X POST http://localhost:8000/scan -H "Content-Type: application/json" \
 
 | Endpoint | Descrição |
 |---|---|
-| `POST /scan` | Executa o scan (`{"url": "...", "checks": [...] }`, `checks` opcional) e retorna os findings em JSON |
+| `POST /scan` | Executa o scan web (`{"url": "...", "checks": [...] }`, `checks` opcional) e retorna os findings em JSON. As severidades são `critical`/`high`/`medium`/`low`/`info` |
 | `GET /checks` | Lista os módulos com uma descrição educativa de cada um |
 | `GET /health` | Health check |
 
@@ -86,7 +136,7 @@ O módulo `tech_detection` consulta a [NVD API](https://nvd.nist.gov/developers)
 export NVD_API_KEY="sua-chave"   # chave gratuita: https://nvd.nist.gov/developers/request-an-api-key
 ```
 
-Os resultados ficam em cache por 7 dias em `~/.cache/web-vuln-scanner/nvd_cache.json` (altere com `NVD_CACHE_PATH`). Se a NVD falhar, o scan continua com a tabela local e um finding INFO avisa da falha. Severidade CVSS: ≥ 9 alto, ≥ 4 médio, abaixo disso baixo.
+Os resultados ficam em cache por 7 dias em `~/.cache/web-vuln-scanner/nvd_cache.json` (altere com `NVD_CACHE_PATH`). Se a NVD falhar, o scan continua com a tabela local e um finding INFO avisa da falha. Severidade CVSS: ≥ 9 crítico, ≥ 7 alto, ≥ 4 médio, abaixo disso baixo.
 
 ### ⚠️ Segurança ao expor a API
 
@@ -95,14 +145,17 @@ A API já implementa **rate limiting** (10 scans/minuto por IP, via slowapi) e *
 ## Exemplo de saída
 
 ```
-[ALTO] Header Content-Security-Policy ausente
-    A resposta não contém o header Content-Security-Policy.
-    Recomendação: Defina uma CSP restritiva para mitigar XSS e injeção de conteúdo.
-[MÉDIO] Header Strict-Transport-Security ausente
+[CRÍTICO] Arquivo .env exposto com variáveis de ambiente
+    GET https://exemplo.com/.env retornou HTTP 200 com 64 bytes e conteúdo compatível com o tipo de arquivo esperado.
+    Evidência: APP_NAME=****
+    Correção: Remova o arquivo do servidor web ou bloqueie o acesso (...). Considere os segredos comprometidos: revogue e rotacione-os.
+[ALTO] Listagem de diretório habilitada em /uploads/
+    Há arquivos sensíveis: dump.sql.
+    Evidência: Entradas: dump.sql
+[MÉDIO] Header Content-Security-Policy ausente
     ...
-[INFO] Protocolo TLS: TLSv1.3
 
-Resumo: ALTO=1, MÉDIO=1, BAIXO=2, INFO=5
+Resumo: CRÍTICO=1, ALTO=2, MÉDIO=2, BAIXO=3, INFO=5
 ```
 
 ## Estrutura
@@ -110,26 +163,32 @@ Resumo: ALTO=1, MÉDIO=1, BAIXO=2, INFO=5
 ```
 web-vuln-scanner/
   scanner/
-    finding.py   core.py   report.py (texto/JSON/HTML)   cli.py   nvd.py
-    checks/      headers, ssl_tls, cookies, cors, exposed_files, tech_detection, email_dns
-  api/
-    main.py   validation.py
-  tests/
-    test_headers.py   test_api.py   test_tech_detection.py   test_email_dns.py
-    test_exposed_files.py   test_report.py   test_cli.py
+    finding.py   modelo Finding/Severity (evidência, CWE, confiança, fingerprint)
+    http.py      cliente httpx async: rate limit, retry/backoff, proxy, circuit breaker
+    core.py      orquestração assíncrona dos checks e modos
+    report.py    texto, JSON versionado, Markdown, SARIF 2.1.0, HTML
+    cli.py   nvd.py
+    checks/      headers, cookies, tech_detection, ssl_tls, cors, exposed_files,
+                 misconfig, subdomains, email_dns
+  api/           main.py   validation.py
+  tests/         um arquivo por módulo (sem rede: httpx.MockTransport)
 ```
 
-Testes: `pip install -r requirements-dev.txt && pytest tests/ -q`
+Testes: `pip install -r requirements-dev.txt && pytest tests -q`
 
 ## Roadmap
 
-- [ ] Enumeração de subdomínios via crt.sh
 - [x] Integração real com a NVD para checar CVEs
 - [x] API web (FastAPI)
-- [x] Relatório em HTML (JSON e texto já existiam)
 - [x] Módulo de e-mail/DNS (SPF, DKIM, DMARC, DNSBL)
-- [ ] Relatório em PDF
-- [ ] Modo assíncrono
+- [x] Modo assíncrono (`asyncio` + `httpx`), rate limit, retry, proxy
+- [x] Relatórios Markdown, JSON versionado, SARIF e HTML
+- [x] Enumeração passiva de subdomínios (crt.sh)
+- [ ] Priorização de CVEs com EPSS e CISA KEV
+- [ ] Detecção de WAF/CDN
+- [ ] Port scan (módulo ativo, atrás de `--allow-active` e arquivo de escopo)
+- [ ] Arquitetura de plugins (entry points) e `pyproject.toml`
+- [ ] Comparação entre execuções (`--baseline`)
 
 ## Disclaimer
 

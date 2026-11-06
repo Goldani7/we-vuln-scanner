@@ -65,18 +65,57 @@ def test_extract_domain(target, domain):
     assert extract_domain(target) == domain
 
 
-def test_scan_target_modes_dispatch():
-    with patch("scanner.core.scan", return_value=[]) as web, \
-         patch("scanner.core.scan_email", return_value=[]) as mail:
-        scan_target("ex.com", mode="web")
-        assert web.call_args.args == ("https://ex.com",) and not mail.called
-        web.reset_mock()
-        scan_target("https://ex.com/x", mode="email")
-        assert not web.called and mail.call_args.args == ("ex.com",)
-        scan_target("ex.com", mode="full")
-        assert web.called and mail.call_count == 2
+def _dispatch(mode):
+    from unittest.mock import AsyncMock
+    web, mail, sub = AsyncMock(return_value=[]), AsyncMock(return_value=[]), AsyncMock(return_value=[])
+    with patch("scanner.core.scan_web_async", web), patch("scanner.core.scan_email_async", mail), \
+         patch.dict("scanner.core.ASYNC_CHECKS", {"subdomains": sub}):
+        scan_target("https://Ex.com:8443/x", mode=mode)
+    return web.called, mail.called, sub.called, mail
+
+
+@pytest.mark.parametrize("mode,expected", [
+    ("web", (True, False, False)), ("email", (False, True, False)),
+    ("recon", (False, False, True)), ("full", (True, True, True)),
+])
+def test_scan_target_modes_dispatch(mode, expected):
+    assert _dispatch(mode)[:3] == expected
+
+
+def test_email_scan_receives_bare_domain():
+    assert _dispatch("email")[3].call_args.args[0] == "ex.com"
 
 
 def test_scan_target_rejects_bad_mode():
     with pytest.raises(ValueError):
         scan_target("ex.com", mode="x")
+
+
+def test_network_options_build_scan_config():
+    with patch("scanner.cli.scan_target", return_value=OK) as m:
+        main(["-t", "ex.com", "--rate", "2", "--concurrency", "3", "--retries", "5",
+              "--proxy", "socks5://127.0.0.1:9050", "-H", "X-Team: red", "-H", "Authorization: Bearer t",
+              "--user-agent", "acme/1", "--insecure"])
+    cfg = m.call_args.kwargs["config"]
+    assert (cfg.rate, cfg.concurrency, cfg.retries, cfg.verify) == (2, 3, 5, False)
+    assert cfg.proxy == "socks5://127.0.0.1:9050" and cfg.user_agent == "acme/1"
+    assert cfg.headers == {"X-Team": "red", "Authorization": "Bearer t"}
+
+
+def test_malformed_header_is_rejected():
+    assert run(["-t", "ex.com", "-H", "sem-dois-pontos"])[0] == 2
+
+
+@pytest.mark.parametrize("fail_on,sev,code", [
+    ("high", Severity.HIGH, 2), ("high", Severity.MEDIUM, 0), ("critical", Severity.HIGH, 0),
+    ("critical", Severity.CRITICAL, 2), ("low", Severity.LOW, 2), ("none", Severity.CRITICAL, 0),
+])
+def test_fail_on_threshold(fail_on, sev, code):
+    assert run(["-t", "ex.com", "--fail-on", fail_on], [Finding("x", sev, "t")])[0] == code
+
+
+@pytest.mark.parametrize("name,marker", [("r.md", "# Relatório"), ("r.sarif", '"version": "2.1.0"')])
+def test_output_md_and_sarif_by_extension(tmp_path, name, marker):
+    out = tmp_path / name
+    run(["-t", "ex.com", "-o", str(out)], HIGH)
+    assert marker in out.read_text()
