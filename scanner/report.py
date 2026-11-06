@@ -100,9 +100,10 @@ def to_markdown(findings, meta=None, show_info: bool = True) -> str:
             out += [f"| {_md_escape_cell(r['title'])} | {r['severity']} |" for r in base["resolved_findings"]]
     actionable = [f for f in _sorted(findings) if f.severity is not Severity.INFO]
     if actionable:
-        out += ["", "## Achados por prioridade", "", "| # | Severidade | Achado | Confiança |", "|---|---|---|---|"]
-        out += [f"| {i} | {f.severity.label} | {_md_escape_cell(f.title)} | {f.confidence} |"
-                for i, f in enumerate(actionable, 1)]
+        out += ["", "## Achados por prioridade", "",
+               "| # | Severidade | Achado | Potencial de exploração | Confiança |", "|---|---|---|---|---|"]
+        out += [f"| {i} | {f.severity.label} | {_md_escape_cell(f.title)} | {f.exploitability_label} | "
+                f"{f.confidence} |" for i, f in enumerate(actionable, 1)]
     out += ["", "## Detalhes"]
     n = 0
     for f in _sorted(findings):

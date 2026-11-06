@@ -76,6 +76,12 @@ portas) deve declarar `active=True` no `CheckSpec`. Exemplos já no projeto: `po
 expressa; se o check usa sockets fora do cliente HTTP (como `portscan`), verifique o escopo manualmente
 dentro do check também, como defesa em profundidade.
 
+## Interface rica (`scanner/ui.py`)
+
+A camada `--rich` é só apresentação: nunca decide severidade nem filtra achados (isso é sempre
+`scanner.report`/`scanner.core`). Ao adicionar um check novo, não é preciso tocar em `ui.py`: a
+barra de progresso usa o nome do check automaticamente via `core.planned_checks()`.
+
 ## Pull requests
 
 Commits no estilo [Conventional Commits](https://www.conventionalcommits.org/) (`feat(waf): ...`),

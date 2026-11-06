@@ -1,10 +1,21 @@
-# web-vuln-scanner
+# Goldani Scanner (web-vuln-scanner)
+
 
 Scanner de segurança **passivo e não-invasivo** para aplicações web e para a saúde de e-mail/DNS de um domínio, feito para fins de portfólio. Realiza apenas requisições `GET`/`HEAD` comuns — sem brute-force, sem exploração ativa e sem wordlists de diretório.
 
 ## ⚠️ Aviso ético
 
 Use esta ferramenta **somente em sistemas que você possui ou para os quais tem autorização explícita** para testar. O acesso não autorizado a sistemas é crime: no Brasil, a Lei 12.737/2012 (Lei Carolina Dieckmann) tipifica a invasão de dispositivos informáticos; nos EUA, o Computer Fraud and Abuse Act (CFAA) tem efeito semelhante. O autor não se responsabiliza pelo uso indevido.
+
+## Interface rica no terminal (`--rich`)
+
+```bash
+wvs -t https://exemplo.com --rich
+```
+
+Com `--rich` (requer a biblioteca `rich`, instalada por padrão com o pacote): banner, uma barra de progresso por check mostrando quantos achados cada um gerou, e um painel de resumo com uma tabela colorida por severidade. Cada achado também ganha uma tag de **potencial de exploração** (`alto`/`moderado`/`baixo`/`informativo`), derivada de severidade + confiança — não é um campo novo que você precise confiar isoladamente, é sempre `severity` + `confidence` já existentes, só apresentados juntos. Essa tag também aparece no relatório Markdown e no campo `exploitability` do JSON.
+
+`--no-color` desliga as cores (útil em terminais sem suporte ou ao redirecionar a saída). O `--rich` é puramente de apresentação: não muda o que é escrito em `-o`/`--format`, nem a lógica de severidade — isso continua todo em `scanner.report`. Sem a flag, a saída padrão continua em texto simples, igual a antes.
 
 ## Módulos de verificação
 
@@ -279,6 +290,7 @@ Testes: `pip install -r requirements-dev.txt && pytest tests -q`
 - [x] Comparação entre execuções (`--baseline`)
 - [x] Arquivo de escopo (`--scope`), exigido por `--allow-active`
 - [x] CI no GitHub Actions (pytest em Python 3.10 a 3.14, mais o plugin de exemplo)
+- [x] Interface rica no terminal (`--rich`): banner, progresso por check, tabela colorida e tag de potencial de exploração
 
 ## Disclaimer
 

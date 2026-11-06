@@ -140,3 +140,29 @@ def test_active_checks_require_allow_active(capsys, tmp_path):
         assert code == 0 and m.call_args.kwargs["config"].allow_active is True
     finally:
         del REGISTRY._specs["zz_intrusive"]
+
+
+def test_rich_flag_prints_banner_and_table(capsys):
+    pytest.importorskip("rich")
+    code, m = run(["-t", "ex.com", "--rich", "--no-color"], [Finding("headers", Severity.HIGH, "achado rich")])
+    out = capsys.readouterr().out
+    assert code == 2 and "GOLDANI" in out.upper() and "achado rich" in out
+    assert m.call_args.kwargs["progress_cb"] is not None
+
+
+def test_rich_flag_still_writes_requested_output_file(tmp_path):
+    pytest.importorskip("rich")
+    out = tmp_path / "r.json"
+    run(["-t", "ex.com", "--rich", "--no-color", "-o", str(out)], [Finding("x", Severity.LOW, "a")])
+    assert out.exists()
+
+
+def test_rich_without_library_fails_cleanly(monkeypatch, capsys):
+    # Simula a ausência do pacote diretamente na flag que scanner.cli checa, em vez de bloquear
+    # o sistema de import: imports relativos internos do próprio `rich` (ex.: `from .console import
+    # X` dentro de rich/protocol.py) não carregam o nome "rich" no __import__ e escapariam de um
+    # bloqueio por nome, tornando esse tipo de simulação frágil e dependente de versão da lib.
+    from scanner import ui
+    monkeypatch.setattr(ui, "RICH_AVAILABLE", False)
+    code, m = run(["-t", "ex.com", "--rich"])
+    assert code == 2 and not m.called and "pip install rich" in capsys.readouterr().err

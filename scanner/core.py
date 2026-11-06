@@ -84,14 +84,23 @@ def _failure(name: str, e: Exception) -> list:
                     "Execute com -v para ver o traceback.", rule_id=f"{name}.error")]
 
 
-async def _safe(name, awaitable) -> list:
-    """Isola um check: nenhuma exceção (timeout, TLS, bug) derruba o scan inteiro."""
+async def _safe(name, awaitable, progress_cb=None) -> list:
+    """Isola um check: nenhuma exceção (timeout, TLS, bug) derruba o scan inteiro.
+
+    `progress_cb(event, name, *rest)` é opcional e só para UI (ex.: scanner.ui.ProgressReporter);
+    nunca afeta o resultado do scan. "start" antes de rodar, "done" com a contagem de achados depois.
+    """
     log.debug("executando check %s", name)
+    if progress_cb:
+        progress_cb("start", name)
     try:
-        return await awaitable
+        result = await awaitable
     except Exception as e:  # noqa: BLE001
         log.debug("check %s falhou", name, exc_info=True)
-        return _failure(name, e)
+        result = _failure(name, e)
+    if progress_cb:
+        progress_cb("done", name, len(result))
+    return result
 
 
 def _tag(findings: list, target: str) -> list:
@@ -131,7 +140,7 @@ def default_web_checks(config: ScanConfig) -> list:
     return REGISTRY.names("web", include_active=config.allow_active)
 
 
-async def scan_web_async(ctx: ScanContext, checks) -> list:
+async def scan_web_async(ctx: ScanContext, checks, progress_cb=None) -> list:
     checks = checks or default_web_checks(ctx.config)
     try:
         response = await ctx.index() if any(c in RESPONSE_CHECKS for c in checks) else None
@@ -149,17 +158,19 @@ async def scan_web_async(ctx: ScanContext, checks) -> list:
     jobs = []
     for name in checks:
         if name in RESPONSE_CHECKS:
-            jobs.append(_safe(name, asyncio.to_thread(RESPONSE_CHECKS[name], response)))
+            jobs.append(_safe(name, asyncio.to_thread(RESPONSE_CHECKS[name], response), progress_cb))
         elif name in ASYNC_CHECKS:
-            jobs.append(_safe(name, ASYNC_CHECKS[name](ctx)))
+            jobs.append(_safe(name, ASYNC_CHECKS[name](ctx), progress_cb))
         elif name in URL_CHECKS:
-            jobs.append(_safe(name, asyncio.to_thread(URL_CHECKS[name], ctx.url, timeout=ctx.config.timeout)))
+            jobs.append(_safe(name, asyncio.to_thread(URL_CHECKS[name], ctx.url, timeout=ctx.config.timeout),
+                              progress_cb))
     return [f for group in await asyncio.gather(*jobs) for f in group]
 
 
-async def scan_email_async(domain: str, config: ScanConfig, checks=None) -> list:
+async def scan_email_async(domain: str, config: ScanConfig, checks=None, progress_cb=None) -> list:
     checks = checks or EMAIL_CHECKS
-    jobs = [_safe(c, asyncio.to_thread(DOMAIN_CHECKS[c], domain, timeout=config.timeout)) for c in checks]
+    jobs = [_safe(c, asyncio.to_thread(DOMAIN_CHECKS[c], domain, timeout=config.timeout), progress_cb)
+           for c in checks]
     return [f for group in await asyncio.gather(*jobs) for f in group]
 
 
@@ -169,8 +180,21 @@ def extract_domain(target: str) -> str:
     return (host or "").rstrip(".").lower()
 
 
+def planned_checks(mode: str, web_checks=None, config: ScanConfig = None) -> list:
+    """Nomes de checks que `scan_target(_async)` vai rodar para este modo (para UI de progresso)."""
+    config = config or ScanConfig()
+    names = []
+    if mode in ("web", "full"):
+        names += web_checks or default_web_checks(config)
+    if mode in ("recon", "full"):
+        names += RECON_CHECKS
+    if mode in ("email", "full"):
+        names += EMAIL_CHECKS
+    return names
+
+
 async def scan_target_async(target: str, mode: str = "full", web_checks=None,
-                            config: ScanConfig = None, transport=None) -> list:
+                            config: ScanConfig = None, transport=None, progress_cb=None) -> list:
     if mode not in MODES:
         raise ValueError(f"modo inválido: {mode}")
     config = config or ScanConfig()
@@ -180,11 +204,11 @@ async def scan_target_async(target: str, mode: str = "full", web_checks=None,
         ctx = ScanContext(url, client, config)
         jobs = []
         if mode in ("web", "full"):
-            jobs.append(scan_web_async(ctx, web_checks))
+            jobs.append(scan_web_async(ctx, web_checks, progress_cb))
         if mode in ("recon", "full"):
-            jobs.extend(_safe(name, ASYNC_CHECKS[name](ctx)) for name in RECON_CHECKS)
+            jobs.extend(_safe(name, ASYNC_CHECKS[name](ctx), progress_cb) for name in RECON_CHECKS)
         if mode in ("email", "full"):
-            jobs.append(scan_email_async(extract_domain(target), config))
+            jobs.append(scan_email_async(extract_domain(target), config, progress_cb=progress_cb))
         for group in await asyncio.gather(*jobs):
             findings.extend(group)
         findings.extend(_rate_limit_notice(client))
@@ -193,10 +217,10 @@ async def scan_target_async(target: str, mode: str = "full", web_checks=None,
 
 
 def scan_target(target: str, mode: str = "full", web_checks=None, timeout: float = 10,
-                config: ScanConfig = None) -> list:
+                config: ScanConfig = None, progress_cb=None) -> list:
     """Ponto de entrada síncrono da CLI: aceita URL ou domínio."""
     config = config or ScanConfig(timeout=timeout)
-    return asyncio.run(scan_target_async(target, mode, web_checks, config))
+    return asyncio.run(scan_target_async(target, mode, web_checks, config, progress_cb=progress_cb))
 
 
 def scan(url: str, checks=None, timeout: int = 8, config: ScanConfig = None) -> list:

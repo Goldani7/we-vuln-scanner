@@ -4,7 +4,7 @@ import os
 import sys
 
 from .baseline import BaselineError, annotate, compare, load_baseline
-from .core import MODES, REGISTRY, extract_domain, scan_target
+from .core import MODES, REGISTRY, extract_domain, planned_checks, scan_target
 from .http import DEFAULT_USER_AGENT, ScanConfig
 from .scope import ScopeError, load_scope
 from .report import to_html, to_json, to_markdown, to_sarif, to_text
@@ -32,6 +32,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-f", "--format", choices=["text", "json", "md", "sarif", "html"],
                    help="formato do relatório (default: text no console, ou pela extensão de --output)")
     p.add_argument("-v", "--verbose", action="store_true", help="mostra logs de depuração")
+    p.add_argument("--rich", action="store_true",
+                   help="banner, barra de progresso por check e tabela colorida no terminal "
+                        "(requer a biblioteca 'rich'; não afeta -o/--format)")
+    p.add_argument("--no-color", action="store_true", help="com --rich: desliga as cores (ex.: terminal sem suporte)")
     p.add_argument("--checks", help="checks web separados por vírgula (default: todos; veja --list-checks)")
     p.add_argument("--list-checks", action="store_true", help="lista os checks disponíveis (inclui plugins) e sai")
     p.add_argument("--scope", metavar="ESCOPO.txt",
@@ -172,6 +176,15 @@ def main(argv=None) -> int:
             print(f"Erro: {e}", file=sys.stderr)
             return 2
 
+    console = progress_cb = None
+    if args.rich:
+        from . import ui
+        if not ui.RICH_AVAILABLE:
+            print("Erro: --rich exige a biblioteca 'rich' (pip install rich).", file=sys.stderr)
+            return 2
+        console = ui.make_console(no_color=args.no_color)
+        ui.print_banner(console, target, args.mode)
+
     try:
         config = ScanConfig(
             timeout=args.timeout, rate=args.rate, concurrency=args.concurrency, retries=args.retries,
@@ -182,7 +195,14 @@ def main(argv=None) -> int:
         print(f"Erro: {e}", file=sys.stderr)
         return 2
 
-    findings = scan_target(target, mode=args.mode, web_checks=checks, config=config)
+    if console is not None:
+        from . import ui
+        with ui.make_progress(console) as progress:
+            reporter = ui.ProgressReporter(progress, planned_checks(args.mode, checks, config))
+            findings = scan_target(target, mode=args.mode, web_checks=checks, config=config,
+                                   progress_cb=reporter.on_event)
+    else:
+        findings = scan_target(target, mode=args.mode, web_checks=checks, config=config)
     meta = {"target": target, "mode": args.mode}
     if scope:
         meta["scope"] = args.scope
@@ -202,7 +222,14 @@ def main(argv=None) -> int:
     }
     report = renderers[fmt]()
 
-    if args.output:
+    if console is not None:
+        from . import ui
+        ui.print_results(console, findings, meta)
+        if args.output:
+            with open(args.output, "w", encoding="utf-8") as fh:
+                fh.write(report + "\n")
+            console.print(f"\n[dim]Relatório {fmt} salvo em {args.output}[/]")
+    elif args.output:
         with open(args.output, "w", encoding="utf-8") as fh:
             fh.write(report + "\n")
         print(text)

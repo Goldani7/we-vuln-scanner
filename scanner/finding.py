@@ -50,6 +50,24 @@ class Finding:
         return self.rule_id or self.check
 
     @property
+    def exploitability(self) -> str:
+        """Slug derivado de severity+confidence: o quanto este achado, por si só, sugere um caminho
+        de exploração real (em vez de só enfraquecer defesas). Nunca é mais confiável que a
+        confiança do achado: um CRITICAL com confidence 'low' não sai como 'alto' sem checagem."""
+        if self.severity is Severity.INFO:
+            return "informativo"
+        if self.severity.rank >= Severity.HIGH.rank and self.confidence in ("high", "medium"):
+            return "alto"
+        if self.severity.rank >= Severity.MEDIUM.rank:
+            return "moderado"
+        return "baixo"
+
+    @property
+    def exploitability_label(self) -> str:
+        return {"alto": "Alto (exploração provável)", "moderado": "Moderado — valide manualmente",
+               "baixo": "Baixo / hardening", "informativo": "Informativo"}[self.exploitability]
+
+    @property
     def fingerprint(self) -> str:
         """Identificador estável para deduplicar achados entre execuções."""
         raw = f"{self.rule}|{self.title}|{self.target}"
@@ -60,4 +78,5 @@ class Finding:
         d["severity"] = self.severity.value
         d["rule_id"] = self.rule
         d["fingerprint"] = self.fingerprint
+        d["exploitability"] = self.exploitability
         return d
