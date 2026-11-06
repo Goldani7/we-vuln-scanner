@@ -14,6 +14,35 @@ from ..finding import Finding, Severity
 
 CHECK = "ssl_tls"
 WEAK_PROTOCOLS = {"SSLv2", "SSLv3", "TLSv1", "TLSv1.1"}
+PROBE_VERSIONS = {
+    "TLSv1": ssl.TLSVersion.TLSv1,
+    "TLSv1.1": ssl.TLSVersion.TLSv1_1,
+    "TLSv1.2": ssl.TLSVersion.TLSv1_2,
+    "TLSv1.3": ssl.TLSVersion.TLSv1_3,
+}
+
+
+def supported_protocols(host: str, port: int, timeout: int = 8) -> list:
+    """Versões TLS que o servidor aceita, testando uma de cada vez (best effort).
+
+    Versões que o OpenSSL local não consegue oferecer são omitidas: ausência na lista
+    significa "não suportado ou não testável", nunca uma garantia.
+    """
+    supported = []
+    for name, version in PROBE_VERSIONS.items():
+        try:
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE  # só sondamos o handshake; o certificado é validado abaixo
+            ctx.minimum_version = ctx.maximum_version = version
+            if version < ssl.TLSVersion.TLSv1_2:
+                ctx.set_ciphers("ALL:@SECLEVEL=0")
+            with socket.create_connection((host, port), timeout=timeout) as sock:
+                with ctx.wrap_socket(sock, server_hostname=host):
+                    supported.append(name)
+        except (OSError, ssl.SSLError, ValueError):
+            continue
+    return supported
 
 
 def check_ssl_tls(url: str, timeout: int = 8) -> list:
@@ -56,6 +85,21 @@ def check_ssl_tls(url: str, timeout: int = 8) -> list:
         findings.append(Finding(
             CHECK, Severity.INFO, f"Protocolo TLS: {version}",
             metadata={"protocol": version},
+        ))
+
+    supported = supported_protocols(host, port, timeout)
+    weak = [p for p in supported if p in WEAK_PROTOCOLS]
+    if weak:
+        findings.append(Finding(
+            CHECK, Severity.MEDIUM, f"Servidor aceita protocolos obsoletos: {', '.join(weak)}",
+            f"Versões aceitas no handshake: {', '.join(supported)}.",
+            "Desabilite TLS 1.0 e 1.1 no servidor/balanceador.",
+            {"supported": supported},
+        ))
+    elif supported:
+        findings.append(Finding(
+            CHECK, Severity.INFO, f"Versões TLS aceitas: {', '.join(supported)}",
+            metadata={"supported": supported},
         ))
 
     not_after = cert.get("notAfter") if cert else None
