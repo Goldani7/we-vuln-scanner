@@ -1,86 +1,104 @@
+import asyncio
+import dataclasses
 import logging
-from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 
-import requests
-
-from .finding import Finding, Severity
-from .checks.headers import check_headers
 from .checks.cookies import check_cookies
-from .checks.tech_detection import check_tech_detection
-from .checks.ssl_tls import check_ssl_tls
 from .checks.cors import check_cors
+from .checks.email_dns import check_dkim, check_dmarc, check_dnsbl, check_spf
 from .checks.exposed_files import check_exposed_files
-from .checks.email_dns import check_spf, check_dkim, check_dmarc, check_dnsbl
+from .checks.headers import check_headers
+from .checks.misconfig import check_misconfig
+from .checks.ssl_tls import check_ssl_tls
+from .checks.subdomains import check_subdomains
+from .checks.tech_detection import check_tech_detection
+from .finding import Finding, Severity
+from .http import HttpClient, RequestFailed, ScanConfig, ScanContext
 
 log = logging.getLogger(__name__)
 
-ALL_CHECKS = ["headers", "cookies", "tech_detection", "ssl_tls", "cors", "exposed_files"]
+ALL_CHECKS = ["headers", "cookies", "tech_detection", "ssl_tls", "cors", "exposed_files", "misconfig"]
 EMAIL_CHECKS = ["spf", "dkim", "dmarc", "dnsbl"]
-MODES = ("web", "email", "full")
+RECON_CHECKS = ["subdomains"]
+MODES = ("web", "email", "recon", "full")
+
+# Checks sobre a resposta da página inicial (funções síncronas e puras).
 RESPONSE_CHECKS = {
     "headers": check_headers,
     "cookies": check_cookies,
-    "tech_detection": check_tech_detection,
+    "tech_detection": check_tech_detection,  # consulta a NVD (requests): roda em thread
 }
-URL_CHECKS = {
-    "ssl_tls": check_ssl_tls,
+# Checks assíncronos que recebem o ScanContext.
+ASYNC_CHECKS = {
     "cors": check_cors,
     "exposed_files": check_exposed_files,
+    "misconfig": check_misconfig,
+    "subdomains": check_subdomains,
 }
-DOMAIN_CHECKS = {
-    "spf": check_spf,
-    "dkim": check_dkim,
-    "dmarc": check_dmarc,
-    "dnsbl": check_dnsbl,
-}
+# Checks de socket/DNS bloqueantes: executados em threads.
+URL_CHECKS = {"ssl_tls": check_ssl_tls}
+DOMAIN_CHECKS = {"spf": check_spf, "dkim": check_dkim, "dmarc": check_dmarc, "dnsbl": check_dnsbl}
 
 
-def _safe(name, fn, *args, **kwargs) -> list:
-    """Executa um check sem deixar uma exceção inesperada derrubar o scan inteiro."""
+def _failure(name: str, e: Exception) -> list:
+    if isinstance(e, RequestFailed):
+        return [Finding(name, Severity.INFO, f"Check '{name}' sem resposta do alvo", e.describe(),
+                        "Verifique a disponibilidade e reduza --rate/--concurrency se houver bloqueio.",
+                        rule_id=f"{name}.unreachable")]
+    return [Finding(name, Severity.INFO, f"Check '{name}' falhou", f"{type(e).__name__}: {e}",
+                    "Execute com -v para ver o traceback.", rule_id=f"{name}.error")]
+
+
+async def _safe(name, awaitable) -> list:
+    """Isola um check: nenhuma exceção (timeout, TLS, bug) derruba o scan inteiro."""
     log.debug("executando check %s", name)
     try:
-        return fn(*args, **kwargs)
-    except Exception as e:  # noqa: BLE001 - isolamos qualquer falha de um check
+        return await awaitable
+    except Exception as e:  # noqa: BLE001
         log.debug("check %s falhou", name, exc_info=True)
-        return [Finding(
-            name, Severity.INFO, f"Check '{name}' falhou",
-            f"{type(e).__name__}: {e}", "Execute com -v para ver o traceback.",
-        )]
+        return _failure(name, e)
 
 
-def scan(url: str, checks=None, timeout: int = 8) -> list:
-    """Scan web. Os checks independentes de resposta rodam em paralelo."""
+def _tag(findings: list, target: str) -> list:
+    return [dataclasses.replace(f, target=f.target or target) for f in findings]
+
+
+def _rate_limit_notice(client: HttpClient) -> list:
+    s = client.stats
+    if not s["throttled"] and not s["failures"]:
+        return []
+    return [Finding(
+        "core", Severity.INFO, "Alvo limitou ou recusou requisições; resultados podem estar incompletos",
+        f"{s['throttled']} resposta(s) 429, {s['failures']} falha(s) de rede, {s['retries']} retentativa(s) "
+        f"em {s['requests']} requisição(ões).",
+        "Reduza --rate e --concurrency, ou combine uma liberação do seu IP com o cliente.",
+        dict(s), rule_id="core.throttled", confidence="high")]
+
+
+async def scan_web_async(ctx: ScanContext, checks) -> list:
     checks = checks or ALL_CHECKS
-    findings = []
-
-    if any(c in RESPONSE_CHECKS for c in checks):
-        try:
-            response = requests.get(url, timeout=timeout)
-        except requests.RequestException as e:
-            return [Finding(
-                "core", Severity.HIGH, "Falha ao conectar ao alvo", str(e),
-                "Verifique a URL e a disponibilidade do alvo.",
-            )]
-        for name in checks:
-            if name in RESPONSE_CHECKS:
-                findings.extend(_safe(name, RESPONSE_CHECKS[name], response))
-
-    url_checks = [c for c in checks if c in URL_CHECKS]
-    if url_checks:
-        with ThreadPoolExecutor(max_workers=len(url_checks)) as pool:
-            futures = [pool.submit(_safe, c, URL_CHECKS[c], url, timeout=timeout) for c in url_checks]
-            for fut in futures:
-                findings.extend(fut.result())
-    return findings
+    try:
+        response = await ctx.index() if any(c in RESPONSE_CHECKS for c in checks) else None
+    except RequestFailed as e:
+        return [Finding("core", Severity.HIGH, f"Falha ao conectar ao alvo ({e.kind})", str(e),
+                        "Verifique a URL, o certificado (use --insecure só para diagnóstico) e a disponibilidade.",
+                        evidence=f"GET {ctx.url} → {e.describe()}", rule_id=f"core.connect-{e.kind}",
+                        confidence="high")]
+    jobs = []
+    for name in checks:
+        if name in RESPONSE_CHECKS:
+            jobs.append(_safe(name, asyncio.to_thread(RESPONSE_CHECKS[name], response)))
+        elif name in ASYNC_CHECKS:
+            jobs.append(_safe(name, ASYNC_CHECKS[name](ctx)))
+        elif name in URL_CHECKS:
+            jobs.append(_safe(name, asyncio.to_thread(URL_CHECKS[name], ctx.url, timeout=ctx.config.timeout)))
+    return [f for group in await asyncio.gather(*jobs) for f in group]
 
 
-def scan_email(domain: str, checks=None, timeout: int = 8) -> list:
-    """Scan de e-mail/DNS (SPF, DKIM, DMARC, DNSBL), com os checks em paralelo."""
+async def scan_email_async(domain: str, config: ScanConfig, checks=None) -> list:
     checks = checks or EMAIL_CHECKS
-    with ThreadPoolExecutor(max_workers=len(checks)) as pool:
-        futures = [pool.submit(_safe, c, DOMAIN_CHECKS[c], domain, timeout=timeout) for c in checks]
-        return [f for fut in futures for f in fut.result()]
+    jobs = [_safe(c, asyncio.to_thread(DOMAIN_CHECKS[c], domain, timeout=config.timeout)) for c in checks]
+    return [f for group in await asyncio.gather(*jobs) for f in group]
 
 
 def extract_domain(target: str) -> str:
@@ -89,14 +107,35 @@ def extract_domain(target: str) -> str:
     return (host or "").rstrip(".").lower()
 
 
-def scan_target(target: str, mode: str = "full", web_checks=None, timeout: int = 8) -> list:
-    """Ponto de entrada da CLI: aceita URL ou domínio e roda os módulos do modo escolhido."""
+async def scan_target_async(target: str, mode: str = "full", web_checks=None,
+                            config: ScanConfig = None, transport=None) -> list:
     if mode not in MODES:
         raise ValueError(f"modo inválido: {mode}")
+    config = config or ScanConfig()
+    url = target if "://" in target else f"https://{target}"
     findings = []
-    if mode in ("web", "full"):
-        url = target if "://" in target else f"https://{target}"
-        findings.extend(scan(url, checks=web_checks, timeout=timeout))
-    if mode in ("email", "full"):
-        findings.extend(scan_email(extract_domain(target), timeout=timeout))
-    return findings
+    async with HttpClient(config, transport=transport) as client:
+        ctx = ScanContext(url, client, config)
+        jobs = []
+        if mode in ("web", "full"):
+            jobs.append(scan_web_async(ctx, web_checks))
+        if mode in ("recon", "full"):
+            jobs.append(_safe("subdomains", ASYNC_CHECKS["subdomains"](ctx)))
+        if mode in ("email", "full"):
+            jobs.append(scan_email_async(extract_domain(target), config))
+        for group in await asyncio.gather(*jobs):
+            findings.extend(group)
+        findings.extend(_rate_limit_notice(client))
+    return _tag(findings, url)
+
+
+def scan_target(target: str, mode: str = "full", web_checks=None, timeout: float = 10,
+                config: ScanConfig = None) -> list:
+    """Ponto de entrada síncrono da CLI: aceita URL ou domínio."""
+    config = config or ScanConfig(timeout=timeout)
+    return asyncio.run(scan_target_async(target, mode, web_checks, config))
+
+
+def scan(url: str, checks=None, timeout: int = 8, config: ScanConfig = None) -> list:
+    """Scan web síncrono (usado pela API). Seguro de chamar de uma thread sem event loop."""
+    return scan_target(url, mode="web", web_checks=checks, timeout=timeout, config=config)
