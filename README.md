@@ -1,6 +1,6 @@
 # web-vuln-scanner
 
-Scanner de segurança **passivo e não-invasivo** para aplicações web, feito para fins de portfólio. Realiza apenas requisições `GET`/`HEAD` comuns — sem brute-force, sem exploração ativa e sem wordlists de diretório.
+Scanner de segurança **passivo e não-invasivo** para aplicações web e para a saúde de e-mail/DNS de um domínio, feito para fins de portfólio. Realiza apenas requisições `GET`/`HEAD` comuns — sem brute-force, sem exploração ativa e sem wordlists de diretório.
 
 ## ⚠️ Aviso ético
 
@@ -15,23 +15,51 @@ Use esta ferramenta **somente em sistemas que você possui ou para os quais tem 
 | `tech_detection` | Exposição de `Server`/`X-Powered-By` e CVEs reais da versão detectada (NVD/NIST), com fallback para tabela local |
 | `ssl_tls` | Versão do protocolo TLS e validade/expiração do certificado |
 | `cors` | Configuração de CORS permissiva ou que reflete origens arbitrárias |
-| `exposed_files` | Arquivos sensíveis comuns acessíveis (`/.env`, `/.git/config`, etc.) |
+| `exposed_files` | Arquivos sensíveis comuns acessíveis (`/.env`, `/.git/config`, `/admin`, `/robots.txt`, etc.), com proteção contra falsos positivos de *soft-404* |
+| `spf` | Existência, sintaxe básica, política final (`-all`/`~all`/`+all`) e limite de 10 consultas DNS |
+| `dkim` | Seletores comuns publicados (`default`, `google`, `selector1`...) e chaves revogadas. Não conclusivo quando nada é achado: seletores personalizados não são enumeráveis |
+| `dmarc` | Presença e política (`none`/`quarantine`/`reject`), `pct` e endereço de relatórios (`rua`) |
+| `dnsbl` | Servidores de e-mail (MX) e domínio nas listas Spamhaus, SpamCop e Barracuda |
+
+Os checks web rodam em paralelo (`ThreadPoolExecutor`), e uma falha inesperada em um check vira um finding informativo em vez de derrubar o scan.
 
 ## Instalação
 
 ```bash
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+Requer Python 3.10+.
 
 ## Uso
 
 ```bash
-python -m scanner.cli https://exemplo.com
-python -m scanner.cli https://exemplo.com --format json --output relatorio.json
-python -m scanner.cli https://exemplo.com --checks headers,cookies --no-info
+# Tudo (web + e-mail/DNS): aceita URL ou domínio
+python -m scanner.cli -t https://exemplo.com
+
+# Só o módulo web / só e-mail e domínio
+python -m scanner.cli -t https://exemplo.com -m web
+python -m scanner.cli -t exemplo.com -m email
+
+# Relatório em arquivo: o formato vem da extensão (.json ou .html)
+python -m scanner.cli -t exemplo.com -o relatorio.html
+python -m scanner.cli -t exemplo.com -o relatorio.json
+
+# Subconjunto de checks web, sem findings informativos, com logs de depuração
+python -m scanner.cli -t https://exemplo.com -m web --checks headers,cookies --no-info -v
 ```
 
-Opções: `--checks`, `--format text|json`, `--output`, `--no-info`, `--timeout`.
+| Opção | Descrição |
+|---|---|
+| `-t`, `--target` | URL ou domínio alvo (também aceito como argumento posicional) |
+| `-m`, `--mode` | `web`, `email` ou `full` (padrão) |
+| `-o`, `--output` | Arquivo do relatório; `.json` ou `.html` |
+| `-f`, `--format` | `text`, `json` ou `html` (sobrescreve a extensão; sem `-o`, imprime no console) |
+| `-v`, `--verbose` | Logs de depuração em stderr |
+| `--checks`, `--no-info`, `--timeout` | Checks web a executar, ocultar INFO, timeout em segundos |
+
 Código de saída `2` se houver algum finding de severidade alta; caso contrário `0`.
 
 ## API web (FastAPI)
@@ -82,12 +110,13 @@ Resumo: ALTO=1, MÉDIO=1, BAIXO=2, INFO=5
 ```
 web-vuln-scanner/
   scanner/
-    finding.py   core.py   report.py   cli.py   nvd.py
-    checks/      headers, ssl_tls, cookies, cors, exposed_files, tech_detection
+    finding.py   core.py   report.py (texto/JSON/HTML)   cli.py   nvd.py
+    checks/      headers, ssl_tls, cookies, cors, exposed_files, tech_detection, email_dns
   api/
     main.py   validation.py
   tests/
-    test_headers.py   test_api.py   test_tech_detection.py
+    test_headers.py   test_api.py   test_tech_detection.py   test_email_dns.py
+    test_exposed_files.py   test_report.py   test_cli.py
 ```
 
 Testes: `pip install -r requirements-dev.txt && pytest tests/ -q`
@@ -97,7 +126,9 @@ Testes: `pip install -r requirements-dev.txt && pytest tests/ -q`
 - [ ] Enumeração de subdomínios via crt.sh
 - [x] Integração real com a NVD para checar CVEs
 - [x] API web (FastAPI)
-- [ ] Relatório em PDF/HTML
+- [x] Relatório em HTML (JSON e texto já existiam)
+- [x] Módulo de e-mail/DNS (SPF, DKIM, DMARC, DNSBL)
+- [ ] Relatório em PDF
 - [ ] Modo assíncrono
 
 ## Disclaimer
