@@ -99,7 +99,7 @@ class HttpClient:
         self._sem = asyncio.Semaphore(max(1, self.config.concurrency))
         self._sleep = sleep
         self._failures = {}  # host -> falhas consecutivas
-        self.stats = {"requests": 0, "retries": 0, "throttled": 0, "failures": 0}
+        self.stats = {"requests": 0, "retries": 0, "throttled": 0, "forbidden": 0, "failures": 0}
         headers = {"User-Agent": self.config.user_agent, **self.config.headers}
         self._client = httpx.AsyncClient(
             headers=headers, proxy=self.config.proxy, verify=self.config.verify,
@@ -161,6 +161,8 @@ class HttpClient:
 
             if response.status_code == 429:
                 self.stats["throttled"] += 1
+            elif response.status_code in (403, 406):
+                self.stats["forbidden"] += 1
             if response.status_code in RETRY_STATUSES and not last_attempt:
                 self.stats["retries"] += 1
                 await self._sleep(self._retry_delay(response, attempt))

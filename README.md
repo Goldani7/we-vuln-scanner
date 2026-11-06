@@ -13,6 +13,7 @@ Use esta ferramenta **somente em sistemas que você possui ou para os quais tem 
 | `headers` | Avalia o **valor**, não só a presença: CSP com `unsafe-inline`/curingas, HSTS com `max-age` curto ou sem `includeSubDomains`, `X-Frame-Options` inválido (considera `frame-ancestors`), `nosniff`, `Referrer-Policy` insegura, COOP/CORP, vazamento de versão (`X-AspNet-Version`) |
 | `cookies` | Flags Secure, HttpOnly e SameSite, priorizando cookies com nome de sessão/autenticação. O valor do cookie nunca vai para o relatório |
 | `tech_detection` | Exposição de `Server`/`X-Powered-By` e CVEs da versão detectada (NVD/NIST), **priorizados por EPSS e CISA KEV** (veja abaixo), com fallback para tabela local. Os CVEs vêm de busca por palavra-chave, então têm `confidence: low` (ou `medium` quando a KEV confirma o mesmo produto): valide a versão afetada |
+| `waf` | Identifica **passivamente** WAF/CDN/balanceador (Cloudflare, Akamai, CloudFront, Fastly, Imperva, F5, Azure, ModSecurity e outros ~20) por headers, cookies e páginas de bloqueio, sem enviar payloads. Avisa que `Server` e versões pertencem à borda e que o scan pode estar sendo bloqueado |
 | `ssl_tls` | Protocolo negociado, **versões TLS aceitas** (sonda TLS 1.0/1.1/1.2/1.3) e validade/expiração do certificado |
 | `cors` | Origem arbitrária refletida, `Origin: null` e `*` com credenciais, com severidade conforme o impacto real |
 | `exposed_files` | ~25 caminhos sensíveis (`.env`, `.git`, dumps SQL, chaves SSH, backups, Actuator, phpinfo...). **O conteúdo é validado por assinatura** (um 200 não basta), há baseline anti-soft-404 e **segredos são mascarados** na evidência |
@@ -110,7 +111,7 @@ python -m scanner.cli -t https://cliente.com -m web --rate 2 --concurrency 4 \
 | `--user-agent` | Padrão: `web-vuln-scanner/<versão>`, que identifica a ferramenta |
 | `--insecure` | Não valida o certificado do alvo (só diagnóstico) |
 
-Se o alvo responde 429 ou falha repetidamente, o scan **não insiste**: há retry com backoff, um circuit breaker por host e um achado informando que os resultados podem estar incompletos (reduza `--rate`). Timeouts, erros TLS e conexão recusada viram achados classificados, nunca um traceback.
+Se o alvo responde 429, bloqueia a maioria das requisições com 403/406 ou falha repetidamente, o scan **não insiste**: há retry com backoff, um circuit breaker por host e um achado informando que os resultados podem estar incompletos (reduza `--rate`). Timeouts, erros TLS e conexão recusada viram achados classificados, nunca um traceback.
 
 Limitações: o `--proxy` cobre as requisições HTTP ao alvo e à crt.sh; a resolução DNS (subdomínios, SPF/DKIM/DMARC) e a consulta à NVD usam a rede direta.
 
@@ -201,7 +202,8 @@ Testes: `pip install -r requirements-dev.txt && pytest tests -q`
 - [x] Relatórios Markdown, JSON versionado, SARIF e HTML
 - [x] Enumeração passiva de subdomínios (crt.sh)
 - [x] Priorização de CVEs com EPSS e CISA KEV
-- [ ] Detecção de WAF/CDN
+- [x] Detecção passiva de WAF/CDN
+- [ ] Detecção ativa de WAF (requisição que provoca bloqueio), atrás de `--allow-active`
 - [ ] Port scan (módulo ativo, atrás de `--allow-active` e arquivo de escopo)
 - [ ] Arquitetura de plugins (entry points) e `pyproject.toml`
 - [ ] Comparação entre execuções (`--baseline`)

@@ -12,12 +12,13 @@ from .checks.misconfig import check_misconfig
 from .checks.ssl_tls import check_ssl_tls
 from .checks.subdomains import check_subdomains
 from .checks.tech_detection import check_tech_detection
+from .checks.waf import check_waf
 from .finding import Finding, Severity
 from .http import HttpClient, RequestFailed, ScanConfig, ScanContext
 
 log = logging.getLogger(__name__)
 
-ALL_CHECKS = ["headers", "cookies", "tech_detection", "ssl_tls", "cors", "exposed_files", "misconfig"]
+ALL_CHECKS = ["headers", "cookies", "tech_detection", "waf", "ssl_tls", "cors", "exposed_files", "misconfig"]
 EMAIL_CHECKS = ["spf", "dkim", "dmarc", "dnsbl"]
 RECON_CHECKS = ["subdomains"]
 MODES = ("web", "email", "recon", "full")
@@ -27,6 +28,7 @@ RESPONSE_CHECKS = {
     "headers": check_headers,
     "cookies": check_cookies,
     "tech_detection": check_tech_detection,  # consulta a NVD (requests): roda em thread
+    "waf": check_waf,
 }
 # Checks assíncronos que recebem o ScanContext.
 ASYNC_CHECKS = {
@@ -63,14 +65,19 @@ def _tag(findings: list, target: str) -> list:
     return [dataclasses.replace(f, target=f.target or target) for f in findings]
 
 
+def _looks_blocked(s: dict) -> bool:
+    """Muitos 403/406 em proporção alta sugerem bloqueio ativo (WAF/rate limit), não só arquivos protegidos."""
+    return s["forbidden"] >= 10 and s["forbidden"] >= 0.5 * s["requests"]
+
+
 def _rate_limit_notice(client: HttpClient) -> list:
     s = client.stats
-    if not s["throttled"] and not s["failures"]:
+    if not s["throttled"] and not s["failures"] and not _looks_blocked(s):
         return []
     return [Finding(
         "core", Severity.INFO, "Alvo limitou ou recusou requisições; resultados podem estar incompletos",
-        f"{s['throttled']} resposta(s) 429, {s['failures']} falha(s) de rede, {s['retries']} retentativa(s) "
-        f"em {s['requests']} requisição(ões).",
+        f"{s['throttled']} resposta(s) 429, {s['forbidden']} resposta(s) 403/406, {s['failures']} falha(s) de rede, "
+        f"{s['retries']} retentativa(s) em {s['requests']} requisição(ões).",
         "Reduza --rate e --concurrency, ou combine uma liberação do seu IP com o cliente.",
         dict(s), rule_id="core.throttled", confidence="high")]
 

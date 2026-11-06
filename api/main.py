@@ -22,6 +22,8 @@ CHECK_DESCRIPTIONS = {
                "sessão podem ser roubados via XSS, rede insegura ou CSRF.",
     "tech_detection": "Detecta software/versão expostos em Server/X-Powered-By e consulta CVEs "
                       "conhecidas na NVD. Versões antigas têm exploits públicos.",
+    "waf": "Identifica passivamente WAF/CDN (Cloudflare, Akamai, CloudFront...) por headers, cookies "
+           "e páginas de bloqueio. Muda a leitura do scan: a borda mascara a origem e pode filtrar achados.",
     "ssl_tls": "Verifica versão do TLS e validade do certificado. Protocolos antigos e "
                "certificados expirados permitem interceptação e quebram a confiança.",
     "cors": "Testa se o CORS aceita origens arbitrárias. Uma política permissiva deixa sites "
