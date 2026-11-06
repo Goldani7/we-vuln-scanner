@@ -62,10 +62,11 @@ Os CVEs são ordenados por **KEV → EPSS → CVSS**, e só os 10 de maior prior
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e .          # instala os comandos `wvs` e `web-vuln-scanner`
+pip install -e ".[api]"   # opcional: API web (FastAPI)
 ```
 
-Requer Python 3.10+.
+Requer Python 3.10+. Sem instalar, `pip install -r requirements.txt` e `python -m scanner.cli ...` também funcionam; abaixo `wvs` e `python -m scanner.cli` são equivalentes.
 
 ## Uso
 
@@ -97,6 +98,9 @@ python -m scanner.cli -t https://cliente.com -m web --rate 2 --concurrency 4 \
 | `-f`, `--format` | `text`, `json`, `md`, `sarif` ou `html` (sobrescreve a extensão; sem `-o`, imprime no console) |
 | `--fail-on` | `critical`, `high` (padrão), `medium`, `low` ou `none`: severidade mínima para sair com código 2 (CI) |
 | `--checks`, `--no-info`, `-v` | Checks web a executar, ocultar INFO, logs de depuração |
+| `--list-checks` | Lista os checks disponíveis, incluindo plugins, e sai |
+| `--baseline`, `--new-only` | Compara com um relatório JSON anterior; `--new-only` mostra e avalia `--fail-on` só nos achados novos |
+| `--allow-active` | Libera checks ativos/intrusivos (nenhum embutido por enquanto; exige autorização expressa do dono do alvo) |
 
 **Rede e desempenho:**
 
@@ -114,6 +118,18 @@ python -m scanner.cli -t https://cliente.com -m web --rate 2 --concurrency 4 \
 Se o alvo responde 429, bloqueia a maioria das requisições com 403/406 ou falha repetidamente, o scan **não insiste**: há retry com backoff, um circuit breaker por host e um achado informando que os resultados podem estar incompletos (reduza `--rate`). Timeouts, erros TLS e conexão recusada viram achados classificados, nunca um traceback.
 
 Limitações: o `--proxy` cobre as requisições HTTP ao alvo e à crt.sh; a resolução DNS (subdomínios, SPF/DKIM/DMARC) e a consulta à NVD usam a rede direta.
+
+### Comparação entre execuções (`--baseline`)
+
+Compara com um relatório JSON anterior pelo `fingerprint` de cada achado e mostra o que é **novo**, o que **persiste** e o que foi **resolvido**:
+
+```bash
+wvs -t https://staging.exemplo.com -o base.json                    # primeira execução: guarda o baseline
+wvs -t https://staging.exemplo.com --baseline base.json -o hoje.json
+wvs -t https://staging.exemplo.com --baseline base.json --new-only --fail-on high   # CI: só falha por achado NOVO
+```
+
+Achados `info` não entram na comparação. Um achado que reaparece depois de corrigido conta como inalterado (já estava no baseline). Se o título de um achado muda (ex.: o EPSS de um CVE aparece no título), ele aparece como resolvido + novo, o que é uma mudança de risco que vale revisar. O SARIF recebe `baselineState` (`new`/`unchanged`) em cada resultado.
 
 ### Integração com CI/CD
 
@@ -175,6 +191,17 @@ A API já implementa **rate limiting** (10 scans/minuto por IP, via slowapi) e *
 Resumo: CRÍTICO=1, ALTO=2, MÉDIO=2, BAIXO=3, INFO=5
 ```
 
+## Plugins
+
+Checks de terceiros se instalam como pacotes Python e aparecem sozinhos na CLI e na API, sem alterar este repositório:
+
+```bash
+pip install -e examples/wvs-plugin-cache-control
+wvs --list-checks     # a coluna ORIGEM mostra plugin:cache_control
+```
+
+O mecanismo é o entry point `wvs.checks` apontando para um `CheckSpec` (`scanner/registry.py`). Plugins quebrados são ignorados com aviso. Guia completo, assinaturas e boas práticas em [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Estrutura
 
 ```
@@ -182,7 +209,10 @@ web-vuln-scanner/
   scanner/
     finding.py   modelo Finding/Severity (evidência, CWE, confiança, fingerprint)
     http.py      cliente httpx async: rate limit, retry/backoff, proxy, circuit breaker
+    registry.py  registro de checks e plugins (entry point wvs.checks)
     core.py      orquestração assíncrona dos checks e modos
+    baseline.py  comparação entre execuções
+    threatintel.py  EPSS e CISA KEV
     report.py    texto, JSON versionado, Markdown, SARIF 2.1.0, HTML
     cli.py   nvd.py
     checks/      headers, cookies, tech_detection, ssl_tls, cors, exposed_files,
@@ -205,8 +235,10 @@ Testes: `pip install -r requirements-dev.txt && pytest tests -q`
 - [x] Detecção passiva de WAF/CDN
 - [ ] Detecção ativa de WAF (requisição que provoca bloqueio), atrás de `--allow-active`
 - [ ] Port scan (módulo ativo, atrás de `--allow-active` e arquivo de escopo)
-- [ ] Arquitetura de plugins (entry points) e `pyproject.toml`
-- [ ] Comparação entre execuções (`--baseline`)
+- [x] Arquitetura de plugins (entry points) e `pyproject.toml`
+- [x] Comparação entre execuções (`--baseline`)
+- [ ] Arquivo de escopo (`--scope`) obrigatório para checks ativos
+- [ ] CI no GitHub Actions (pytest em Python 3.10 a 3.14)
 
 ## Disclaimer
 

@@ -15,31 +15,56 @@ from .checks.tech_detection import check_tech_detection
 from .checks.waf import check_waf
 from .finding import Finding, Severity
 from .http import HttpClient, RequestFailed, ScanConfig, ScanContext
+from .registry import CheckSpec, Registry
 
 log = logging.getLogger(__name__)
 
-ALL_CHECKS = ["headers", "cookies", "tech_detection", "waf", "ssl_tls", "cors", "exposed_files", "misconfig"]
-EMAIL_CHECKS = ["spf", "dkim", "dmarc", "dnsbl"]
-RECON_CHECKS = ["subdomains"]
+REGISTRY = Registry()
+for _spec in (
+    CheckSpec("headers", "response", check_headers, "web",
+              "Verifica headers de segurança (CSP, HSTS, X-Frame-Options...). Eles instruem o navegador a "
+              "bloquear XSS, clickjacking e downgrade para HTTP."),
+    CheckSpec("cookies", "response", check_cookies, "web",
+              "Verifica as flags Secure, HttpOnly e SameSite dos cookies. Sem elas, cookies de sessão podem "
+              "ser roubados via XSS, rede insegura ou CSRF."),
+    CheckSpec("tech_detection", "response", check_tech_detection, "web",
+              "Detecta software/versão expostos em Server/X-Powered-By e consulta CVEs na NVD, priorizadas "
+              "por EPSS e CISA KEV."),  # consulta a NVD (requests): roda em thread
+    CheckSpec("waf", "response", check_waf, "web",
+              "Identifica passivamente WAF/CDN (Cloudflare, Akamai, CloudFront...) por headers, cookies e "
+              "páginas de bloqueio. A borda mascara a origem e pode filtrar achados."),
+    CheckSpec("ssl_tls", "url", check_ssl_tls, "web",
+              "Verifica versões do TLS aceitas e validade do certificado. Protocolos antigos e certificados "
+              "expirados permitem interceptação e quebram a confiança."),
+    CheckSpec("cors", "async", check_cors, "web",
+              "Testa se o CORS aceita origens arbitrárias. Uma política permissiva deixa sites maliciosos "
+              "ler respostas autenticadas do usuário."),
+    CheckSpec("exposed_files", "async", check_exposed_files, "web",
+              "Procura arquivos sensíveis comuns (.env, .git, backups) e valida o conteúdo para evitar falsos "
+              "positivos. Eles costumam vazar credenciais e código-fonte."),
+    CheckSpec("misconfig", "async", check_misconfig, "web",
+              "Verifica redirecionamento HTTP→HTTPS, método TRACE, listagem de diretório e páginas de erro "
+              "com stack trace, que vazam informação sobre o servidor."),
+    CheckSpec("subdomains", "async", check_subdomains, "recon",
+              "Enumeração passiva de subdomínios via Certificate Transparency (crt.sh)."),
+    CheckSpec("spf", "domain", check_spf, "email", "SPF: autoriza quais servidores enviam e-mail pelo domínio."),
+    CheckSpec("dkim", "domain", check_dkim, "email", "DKIM: assinatura criptográfica dos e-mails enviados."),
+    CheckSpec("dmarc", "domain", check_dmarc, "email", "DMARC: política contra e-mails falsificados."),
+    CheckSpec("dnsbl", "domain", check_dnsbl, "email", "Reputação dos servidores de e-mail em listas DNSBL."),
+):
+    REGISTRY.register(_spec)
+REGISTRY.load_plugins()  # checks de terceiros via entry point "wvs.checks"
+
+ALL_CHECKS = REGISTRY.names("web")
+EMAIL_CHECKS = REGISTRY.names("email")
+RECON_CHECKS = REGISTRY.names("recon")
 MODES = ("web", "email", "recon", "full")
 
-# Checks sobre a resposta da página inicial (funções síncronas e puras).
-RESPONSE_CHECKS = {
-    "headers": check_headers,
-    "cookies": check_cookies,
-    "tech_detection": check_tech_detection,  # consulta a NVD (requests): roda em thread
-    "waf": check_waf,
-}
-# Checks assíncronos que recebem o ScanContext.
-ASYNC_CHECKS = {
-    "cors": check_cors,
-    "exposed_files": check_exposed_files,
-    "misconfig": check_misconfig,
-    "subdomains": check_subdomains,
-}
-# Checks de socket/DNS bloqueantes: executados em threads.
-URL_CHECKS = {"ssl_tls": check_ssl_tls}
-DOMAIN_CHECKS = {"spf": check_spf, "dkim": check_dkim, "dmarc": check_dmarc, "dnsbl": check_dnsbl}
+# Visões por tipo de assinatura (derivadas do registro).
+RESPONSE_CHECKS = REGISTRY.by_kind("response")  # sobre a resposta da página inicial (roda em thread)
+ASYNC_CHECKS = REGISTRY.by_kind("async")        # recebem o ScanContext
+URL_CHECKS = REGISTRY.by_kind("url")            # bloqueantes (socket): em thread
+DOMAIN_CHECKS = REGISTRY.by_kind("domain")      # bloqueantes (DNS): em thread
 
 
 def _failure(name: str, e: Exception) -> list:
@@ -82,8 +107,13 @@ def _rate_limit_notice(client: HttpClient) -> list:
         dict(s), rule_id="core.throttled", confidence="high")]
 
 
+def default_web_checks(config: ScanConfig) -> list:
+    """Checks web padrão; os ativos só entram com allow_active."""
+    return REGISTRY.names("web", include_active=config.allow_active)
+
+
 async def scan_web_async(ctx: ScanContext, checks) -> list:
-    checks = checks or ALL_CHECKS
+    checks = checks or default_web_checks(ctx.config)
     try:
         response = await ctx.index() if any(c in RESPONSE_CHECKS for c in checks) else None
     except RequestFailed as e:
@@ -127,7 +157,7 @@ async def scan_target_async(target: str, mode: str = "full", web_checks=None,
         if mode in ("web", "full"):
             jobs.append(scan_web_async(ctx, web_checks))
         if mode in ("recon", "full"):
-            jobs.append(_safe("subdomains", ASYNC_CHECKS["subdomains"](ctx)))
+            jobs.extend(_safe(name, ASYNC_CHECKS[name](ctx)) for name in RECON_CHECKS)
         if mode in ("email", "full"):
             jobs.append(scan_email_async(extract_domain(target), config))
         for group in await asyncio.gather(*jobs):

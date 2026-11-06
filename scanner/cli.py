@@ -3,7 +3,8 @@ import logging
 import os
 import sys
 
-from .core import ALL_CHECKS, MODES, scan_target
+from .baseline import BaselineError, annotate, compare, load_baseline
+from .core import MODES, REGISTRY, scan_target
 from .http import DEFAULT_USER_AGENT, ScanConfig
 from .report import to_html, to_json, to_markdown, to_sarif, to_text
 
@@ -30,8 +31,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-f", "--format", choices=["text", "json", "md", "sarif", "html"],
                    help="formato do relatório (default: text no console, ou pela extensão de --output)")
     p.add_argument("-v", "--verbose", action="store_true", help="mostra logs de depuração")
-    p.add_argument("--checks", default=",".join(ALL_CHECKS),
-                   help="checks web separados por vírgula (default: todos)")
+    p.add_argument("--checks", help="checks web separados por vírgula (default: todos; veja --list-checks)")
+    p.add_argument("--list-checks", action="store_true", help="lista os checks disponíveis (inclui plugins) e sai")
+    p.add_argument("--allow-active", action="store_true",
+                   help="permite checks ativos/intrusivos (só em alvos com autorização expressa)")
+    p.add_argument("--baseline", metavar="RELATORIO.json",
+                   help="compara com um relatório JSON anterior e marca achados novos/resolvidos")
+    p.add_argument("--new-only", action="store_true",
+                   help="com --baseline: mostra e avalia --fail-on apenas nos achados novos")
     p.add_argument("--no-info", action="store_true", help="oculta findings informativos")
     p.add_argument("--timeout", type=float, default=10, help="timeout por requisição, em segundos")
 
@@ -51,6 +58,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--fail-on", choices=list(FAIL_LEVELS), default="high",
                    help="exit code 2 se houver achado desta severidade ou maior (default: high)")
     return p
+
+
+def _format_check_list() -> str:
+    rows = [f"{'CHECK':<16}{'CATEGORIA':<10}{'ATIVO':<7}{'ORIGEM':<22}DESCRIÇÃO"]
+    for name in REGISTRY.names(include_active=True):
+        s = REGISTRY.get(name)
+        rows.append(f"{s.name:<16}{s.category:<10}{'sim' if s.active else 'não':<7}{s.source:<22}"
+                    f"{s.description[:70]}")
+    return "\n".join(rows)
 
 
 def _parse_headers(raw):
@@ -85,9 +101,14 @@ def main(argv=None) -> int:
     for noisy in ("httpx", "httpcore", "asyncio"):  # logs de transporte escondem o que importa
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
+    if args.list_checks:
+        print(_format_check_list())
+        return 0
     target = args.target or args.target_pos
     if not target:
         parser.error("informe o alvo com --target/-t")
+    if args.new_only and not args.baseline:
+        parser.error("--new-only exige --baseline")
 
     fmt = _resolve_format(args)
     if fmt is None:
@@ -95,25 +116,47 @@ def main(argv=None) -> int:
               file=sys.stderr)
         return 2
 
-    checks = [c.strip() for c in args.checks.split(",") if c.strip()]
-    invalid = [c for c in checks if c not in ALL_CHECKS]
-    if invalid:
-        print(f"Erro: checks inválidos: {', '.join(invalid)}. Válidos: {', '.join(ALL_CHECKS)}",
-              file=sys.stderr)
-        return 2
+    checks = None
+    if args.checks:
+        checks = [c.strip() for c in args.checks.split(",") if c.strip()]
+        valid = REGISTRY.names("web", include_active=True)
+        invalid = [c for c in checks if c not in valid]
+        if invalid:
+            print(f"Erro: checks inválidos: {', '.join(invalid)}. Válidos: {', '.join(valid)}",
+                  file=sys.stderr)
+            return 2
+        active = [c for c in checks if REGISTRY.get(c).active]
+        if active and not args.allow_active:
+            print(f"Erro: os checks {', '.join(active)} são ativos/intrusivos e exigem --allow-active "
+                  "(use apenas com autorização expressa do dono do alvo).", file=sys.stderr)
+            return 2
+
+    baseline = None
+    if args.baseline:  # valida antes de gastar um scan inteiro
+        try:
+            baseline = load_baseline(args.baseline)
+        except BaselineError as e:
+            print(f"Erro: {e}", file=sys.stderr)
+            return 2
 
     try:
         config = ScanConfig(
             timeout=args.timeout, rate=args.rate, concurrency=args.concurrency, retries=args.retries,
             proxy=args.proxy, headers=_parse_headers(args.header), user_agent=args.user_agent,
-            verify=not args.insecure)
+            verify=not args.insecure, allow_active=args.allow_active)
     except ValueError as e:
         print(f"Erro: {e}", file=sys.stderr)
         return 2
 
     findings = scan_target(target, mode=args.mode, web_checks=checks, config=config)
     meta = {"target": target, "mode": args.mode}
-    text = to_text(findings, show_info=not args.no_info)
+    if baseline is not None:
+        comparison = compare(findings, baseline, args.baseline)
+        findings = annotate(findings, comparison)
+        meta["baseline"] = comparison.summary()
+        if args.new_only:
+            findings = [f for f in findings if f.status == "new"]
+    text = to_text(findings, show_info=not args.no_info, meta=meta)
     renderers = {
         "text": lambda: text,
         "json": lambda: to_json(findings, meta),

@@ -30,12 +30,12 @@ def _now() -> str:
 
 # ---------------------------------------------------------------------------------------- texto
 
-def to_text(findings, show_info: bool = True) -> str:
+def to_text(findings, show_info: bool = True, meta=None) -> str:
     lines = []
     for f in _sorted(findings):
         if f.severity is Severity.INFO and not show_info:
             continue
-        lines.append(f"[{f.severity.label}] {f.title}")
+        lines.append(f"[{f.severity.label}] {f.title}" + (" (NOVO)" if f.status == "new" else ""))
         if f.detail:
             lines.append(f"    {f.detail}")
         if f.evidence:
@@ -45,6 +45,10 @@ def to_text(findings, show_info: bool = True) -> str:
             lines.append(f"    Correção: {f.remediation}")
     counts = summary(findings)
     lines.append("")
+    base = (meta or {}).get("baseline")
+    if base:
+        lines.append(f"Baseline ({base['file']}): {base['new']} novo(s), {base['unchanged']} inalterado(s), "
+                     f"{base['resolved']} resolvido(s)")
     lines.append("Resumo: " + ", ".join(f"{s.label}={counts[s.value]}" for s in ORDER))
     return "\n".join(lines)
 
@@ -86,6 +90,14 @@ def to_markdown(findings, meta=None, show_info: bool = True) -> str:
         "| Severidade | Qtde |", "|---|---|",
     ]
     out += [f"| {s.label} | {counts[s.value]} |" for s in ORDER]
+    base = meta.get("baseline")
+    if base:
+        out += ["", "## Comparação com baseline", "",
+                f"Baseline: `{base['file']}` · **{base['new']} novo(s)** · {base['unchanged']} inalterado(s) · "
+                f"{base['resolved']} resolvido(s)"]
+        if base["resolved_findings"]:
+            out += ["", "| Resolvido | Severidade |", "|---|---|"]
+            out += [f"| {_md_escape_cell(r['title'])} | {r['severity']} |" for r in base["resolved_findings"]]
     actionable = [f for f in _sorted(findings) if f.severity is not Severity.INFO]
     if actionable:
         out += ["", "## Achados por prioridade", "", "| # | Severidade | Achado | Confiança |", "|---|---|---|---|"]
@@ -99,7 +111,8 @@ def to_markdown(findings, meta=None, show_info: bool = True) -> str:
         n += 1
         out += ["", f"### {n}. [{f.severity.label}] {f.title}", "",
                 f"`{f.rule}` · módulo `{f.check}` · confiança **{f.confidence}**"
-                + (f" · {f.cwe}" if f.cwe else "") + f" · id `{f.fingerprint}`"]
+                + (f" · {f.cwe}" if f.cwe else "") + f" · id `{f.fingerprint}`"
+                + (" · **NOVO**" if f.status == "new" else "")]
         if f.detail:
             out += ["", f.detail]
         if f.evidence:
@@ -151,6 +164,7 @@ def to_sarif(findings, meta=None) -> str:
             "message": {"text": text},
             "locations": [{"physicalLocation": {"artifactLocation": {"uri": f.target or meta.get("target", "")}}}],
             "partialFingerprints": {"wvsFingerprint/v1": f.fingerprint},
+            **({"baselineState": f.status} if f.status else {}),
             "properties": {"severity": f.severity.value, "confidence": f.confidence,
                            "check": f.check, "security-severity": SARIF_SCORE[f.severity]},
         })
@@ -207,7 +221,7 @@ def to_html(findings, meta=None, show_info: bool = True) -> str:
             continue
         parts.append(f"<div class=\"finding {f.severity.value}\">")
         parts.append(f"<span class=\"check\">{esc(f.rule)} · {f.severity.label} · confiança {esc(f.confidence)}"
-                     + (f" · {esc(f.cwe)}" if f.cwe else "") + "</span>")
+                     + (f" · {esc(f.cwe)}" if f.cwe else "") + (" · novo" if f.status == "new" else "") + "</span>")
         parts.append(f"<h3>{esc(f.title)}</h3>")
         if f.detail:
             parts.append(f"<div>{esc(f.detail)}</div>")

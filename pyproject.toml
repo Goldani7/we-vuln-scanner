@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "web-vuln-scanner"
+dynamic = ["version"]
+description = "Scanner passivo de vulnerabilidades web e de e-mail/DNS, com saída SARIF e priorização por EPSS/KEV"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "requests>=2.31.0",
+    "dnspython>=2.4.0",
+    "httpx[socks]>=0.27.0",
+]
+
+[project.optional-dependencies]
+api = ["fastapi>=0.110.0", "uvicorn>=0.27.0", "slowapi>=0.1.9"]
+dev = ["pytest>=8.0.0", "fastapi>=0.110.0", "uvicorn>=0.27.0", "slowapi>=0.1.9"]
+
+[project.scripts]
+wvs = "scanner.cli:main"
+web-vuln-scanner = "scanner.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "scanner.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["scanner*", "api*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

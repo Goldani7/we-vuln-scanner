@@ -32,6 +32,7 @@ class ScanConfig:
     user_agent: str = DEFAULT_USER_AGENT
     verify: bool = True
     max_backoff: float = 30.0
+    allow_active: bool = False  # libera checks intrusivos (CheckSpec.active)
 
 
 class RequestFailed(Exception):

@@ -43,6 +43,7 @@ class Finding:
     confidence: str = "medium"  # low | medium | high
     rule_id: str = ""
     target: str = ""
+    status: str = ""  # "new" | "unchanged" quando comparado com --baseline
 
     @property
     def rule(self) -> str:

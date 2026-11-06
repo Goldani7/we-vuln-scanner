@@ -119,3 +119,22 @@ def test_output_md_and_sarif_by_extension(tmp_path, name, marker):
     out = tmp_path / name
     run(["-t", "ex.com", "-o", str(out)], HIGH)
     assert marker in out.read_text()
+
+
+def test_list_checks_needs_no_target_and_shows_plugin_source(capsys):
+    assert main(["--list-checks"]) == 0
+    out = capsys.readouterr().out
+    assert "exposed_files" in out and "builtin" in out and "ORIGEM" in out
+
+
+def test_active_checks_require_allow_active(capsys):
+    from scanner.core import REGISTRY
+    from scanner.registry import CheckSpec
+    REGISTRY.register(CheckSpec("zz_intrusive", "response", lambda r: [], "web", "x", active=True))
+    try:
+        code, m = run(["-t", "ex.com", "--checks", "zz_intrusive"])
+        assert code == 2 and not m.called and "--allow-active" in capsys.readouterr().err
+        code, m = run(["-t", "ex.com", "--checks", "zz_intrusive", "--allow-active"])
+        assert code == 0 and m.call_args.kwargs["config"].allow_active is True
+    finally:
+        del REGISTRY._specs["zz_intrusive"]
