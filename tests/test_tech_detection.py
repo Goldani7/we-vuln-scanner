@@ -7,6 +7,12 @@ from scanner.checks.tech_detection import check_tech_detection, severity_from_cv
 from scanner.finding import Severity
 
 
+@pytest.fixture(autouse=True)
+def _no_threat_intel_network():
+    with patch("scanner.checks.tech_detection.threatintel.enrich", return_value=({}, [])) as m:
+        yield m
+
+
 class FakeResponse:
     def __init__(self, headers):
         self.headers = headers
@@ -90,3 +96,57 @@ def test_query_cves_network_error_raises_nvd_error(tmp_path, monkeypatch):
     with patch("scanner.nvd.requests.get", side_effect=requests.Timeout("t")):
         with pytest.raises(nvd.NVDError):
             nvd.query_cves("nginx", "1.18.0")
+
+
+def _cves():
+    return nvd.parse_cves(NVD_PAYLOAD)
+
+
+KEV_ENTRY = {"vendorProject": "Nginx", "product": "nginx", "dateAdded": "2021-11-03",
+             "dueDate": "2021-11-17", "knownRansomwareCampaignUse": "Known",
+             "requiredAction": "Apply updates per vendor instructions."}
+
+
+def _scan_with_intel(intel, warnings=()):
+    with patch("scanner.checks.tech_detection.nvd.query_cves", return_value=_cves()), \
+         patch("scanner.checks.tech_detection.threatintel.enrich", return_value=(intel, list(warnings))):
+        return check_tech_detection(FakeResponse({"Server": "nginx/1.18.0"}))
+
+
+def test_kev_cve_becomes_critical_with_evidence_and_urgent_remediation():
+    # CVE-2021-0002 tem CVSS 5.0 (médio), mas está na KEV com EPSS alto
+    intel = {"CVE-2021-0002": {"kev": KEV_ENTRY, "epss": 0.97, "percentile": 0.999}}
+    f = next(x for x in _scan_with_intel(intel) if x.metadata.get("cve") == "CVE-2021-0002")
+    assert f.severity is Severity.HIGH  # CVSS médio + KEV => no mínimo ALTO
+    assert "CISA KEV" in f.title and "EPSS 97.0%" in f.title
+    assert "exploração ativa confirmada" in f.evidence and "ransomware: Known" in f.evidence
+    assert f.remediation.startswith("PRIORIDADE MÁXIMA")
+    assert f.metadata["kev"] is True and f.metadata["epss"] == 0.97
+    assert f.confidence == "medium"  # produto da KEV (nginx) bate com a tecnologia detectada
+
+
+def test_kev_on_high_cvss_is_critical():
+    intel = {"CVE-2021-0001": {"kev": KEV_ENTRY, "epss": 0.5, "percentile": 0.9}}
+    f = next(x for x in _scan_with_intel(intel) if x.metadata.get("cve") == "CVE-2021-0001")
+    assert f.severity is Severity.CRITICAL
+
+
+def test_kev_for_unrelated_product_keeps_low_confidence():
+    other = {**KEV_ENTRY, "vendorProject": "Apple", "product": "iOS"}
+    f = next(x for x in _scan_with_intel({"CVE-2021-0002": {"kev": other, "epss": 0.1, "percentile": 0.5}})
+             if x.metadata.get("cve") == "CVE-2021-0002")
+    assert f.confidence == "low"
+
+
+def test_findings_are_ordered_by_exploitation_risk_not_cvss():
+    intel = {"CVE-2021-0003": {"kev": KEV_ENTRY, "epss": 0.9, "percentile": 0.99}}  # CVSS n/d
+    order = [x.metadata["cve"] for x in _scan_with_intel(intel) if "cve" in x.metadata]
+    assert order[0] == "CVE-2021-0003" and order[1:] == ["CVE-2021-0001", "CVE-2021-0002"]
+
+
+def test_intel_failure_is_reported_and_cvss_severity_is_kept():
+    findings = _scan_with_intel({}, ["EPSS indisponível: timeout"])
+    notice = [f for f in findings if f.rule == "tech.intel-unavailable"]
+    assert notice and "EPSS indisponível" in notice[0].detail
+    assert [f.severity for f in findings if "cve" in f.metadata] == [
+        Severity.CRITICAL, Severity.MEDIUM, Severity.LOW]

@@ -8,7 +8,7 @@ Aqui as CVEs são consultadas na NVD (scanner/nvd.py); se falhar, usa-se uma tab
 """
 import re
 
-from .. import nvd
+from .. import nvd, threatintel
 from ..finding import Finding, Severity
 
 CHECK = "tech_detection"
@@ -61,19 +61,62 @@ def _cve_findings(tech: str, version: str) -> list:
         )]
         return findings + _local_fallback(tech, version)
 
+    intel, warnings = threatintel.enrich([c["id"] for c in cves])
+    ranked = sorted(cves, key=lambda c: threatintel.sort_key(c["score"], intel.get(c["id"].upper())),
+                    reverse=True)
+
     findings = []
-    for cve in cves[:MAX_CVES_PER_TECH]:
-        score = cve["score"]
-        shown = f"CVSS {score}" if score is not None else "CVSS n/d"
+    for cve in ranked[:MAX_CVES_PER_TECH]:
+        findings.append(_cve_finding(cve, tech, version, intel.get(cve["id"].upper()) or {}))
+    if warnings:
         findings.append(Finding(
-            CHECK, severity_from_cvss(score), f"{cve['id']} ({shown}) em {tech} {version}",
-            f"{cve['description']} Detalhes: {cve['url']}",
-            f"Atualize {tech} para uma versão sem esta vulnerabilidade.",
-            {"cve": cve["id"], "cvss": score, "url": cve["url"], "tech": tech, "version": version},
-            evidence=f"{tech}/{version} (via header) casou com {cve['id']} por busca de palavra-chave na NVD",
-            references=[cve["url"]], confidence="low", rule_id="tech.cve",
-        ))
+            CHECK, Severity.INFO, "Priorização por EPSS/CISA KEV incompleta",
+            "; ".join(warnings) + ". As severidades abaixo refletem apenas o CVSS.",
+            "Verifique a conectividade ou defina WVS_THREAT_INTEL=0 para executar offline.",
+            rule_id="tech.intel-unavailable"))
     return findings
+
+
+def _pct(value: float) -> str:
+    """Percentual legível: 0.99992 vira '>99.9%' em vez de arredondar para 100%."""
+    return ">99.9%" if value > 0.999 else f"{value:.1%}"
+
+
+def _cve_finding(cve: dict, tech: str, version: str, intel: dict) -> Finding:
+    score, kev, epss = cve["score"], intel.get("kev"), intel.get("epss")
+    severity = threatintel.prioritize(severity_from_cvss(score), bool(kev), epss)
+
+    badges = [f"CVSS {score}" if score is not None else "CVSS n/d"]
+    if epss is not None:
+        badges.append(f"EPSS {_pct(epss)}")
+    if kev:
+        badges.append("CISA KEV")
+
+    evidence = [f"{tech}/{version} (via header) casou com {cve['id']} por busca de palavra-chave na NVD"]
+    if kev:
+        evidence.append(
+            f"CISA KEV: exploração ativa confirmada (adicionado em {kev['dateAdded']}, prazo de correção "
+            f"{kev['dueDate']}, uso em ransomware: {kev['knownRansomwareCampaignUse']}). "
+            f"Produto: {kev['vendorProject']} {kev['product']}")
+    if epss is not None:
+        evidence.append(f"EPSS: {_pct(epss)} de chance de exploração em 30 dias "
+                        f"(percentil {_pct(intel['percentile'])})")
+
+    # A KEV confirma que o CVE é explorado, mas não que ESTA instância é afetada. Se o produto da KEV
+    # bate com a tecnologia detectada, a correspondência é mais confiável.
+    product_match = bool(kev) and tech.lower() in f"{kev['vendorProject']} {kev['product']}".lower()
+    remediation = f"Atualize {tech} para uma versão sem esta vulnerabilidade."
+    if kev:
+        remediation = (f"PRIORIDADE MÁXIMA (explorado ativamente): {kev['requiredAction']} "
+                       f"Confirme a versão instalada e atualize {tech}.")
+    return Finding(
+        CHECK, severity, f"{cve['id']} ({', '.join(badges)}) em {tech} {version}",
+        f"{cve['description']} Detalhes: {cve['url']}", remediation,
+        {"cve": cve["id"], "cvss": score, "url": cve["url"], "tech": tech, "version": version,
+         "kev": bool(kev), "epss": epss, "epss_percentile": intel.get("percentile")},
+        evidence="\n".join(evidence), references=[cve["url"]] + (
+            ["https://www.cisa.gov/known-exploited-vulnerabilities-catalog"] if kev else []),
+        confidence="medium" if product_match else "low", rule_id="tech.cve")
 
 
 def check_tech_detection(response) -> list:

@@ -12,7 +12,7 @@ Use esta ferramenta **somente em sistemas que você possui ou para os quais tem 
 |---|---|
 | `headers` | Avalia o **valor**, não só a presença: CSP com `unsafe-inline`/curingas, HSTS com `max-age` curto ou sem `includeSubDomains`, `X-Frame-Options` inválido (considera `frame-ancestors`), `nosniff`, `Referrer-Policy` insegura, COOP/CORP, vazamento de versão (`X-AspNet-Version`) |
 | `cookies` | Flags Secure, HttpOnly e SameSite, priorizando cookies com nome de sessão/autenticação. O valor do cookie nunca vai para o relatório |
-| `tech_detection` | Exposição de `Server`/`X-Powered-By` e CVEs da versão detectada (NVD/NIST), com fallback para tabela local. Os CVEs vêm de busca por palavra-chave, então têm `confidence: low`: valide a versão afetada |
+| `tech_detection` | Exposição de `Server`/`X-Powered-By` e CVEs da versão detectada (NVD/NIST), **priorizados por EPSS e CISA KEV** (veja abaixo), com fallback para tabela local. Os CVEs vêm de busca por palavra-chave, então têm `confidence: low` (ou `medium` quando a KEV confirma o mesmo produto): valide a versão afetada |
 | `ssl_tls` | Protocolo negociado, **versões TLS aceitas** (sonda TLS 1.0/1.1/1.2/1.3) e validade/expiração do certificado |
 | `cors` | Origem arbitrária refletida, `Origin: null` e `*` com credenciais, com severidade conforme o impacto real |
 | `exposed_files` | ~25 caminhos sensíveis (`.env`, `.git`, dumps SQL, chaves SSH, backups, Actuator, phpinfo...). **O conteúdo é validado por assinatura** (um 200 não basta), há baseline anti-soft-404 e **segredos são mascarados** na evidência |
@@ -39,6 +39,22 @@ Cada achado traz:
 | `rule_id`, `fingerprint` | Identificador da regra e hash estável para deduplicar entre execuções |
 
 Critério de severidade: **critical** = segredo ou dado sensível comprovadamente acessível (`.env` com credenciais, chave privada, dump SQL, CVSS ≥ 9); **high** = exploração direta provável (CORS com credenciais, `.git` exposto, listagem com arquivos sensíveis, CVSS 7-8,9); **medium** = enfraquece defesas ou vaza informação útil (CSP ausente, sem redirect HTTPS, TRACE); **low** = hardening; **info** = confirmações e contexto.
+
+### Priorização de CVEs: EPSS e CISA KEV
+
+O CVSS mede a gravidade técnica, não a chance de uso real. Cada CVE encontrado é enriquecido com:
+
+- **[CISA KEV](https://www.cisa.gov/known-exploited-vulnerabilities-catalog)**: exploração ativa confirmada, com data de inclusão, prazo de correção e uso em ransomware.
+- **[EPSS](https://www.first.org/epss/)** (FIRST): probabilidade de exploração nos próximos 30 dias.
+
+| Condição | Efeito na severidade (só sobe, nunca desce) |
+|---|---|
+| Na KEV e CVSS ≥ 7 | `critical` |
+| Na KEV e CVSS < 7 | no mínimo `high` |
+| EPSS ≥ 50% | no mínimo `high` |
+| EPSS ≥ 10% | no mínimo `medium` |
+
+Os CVEs são ordenados por **KEV → EPSS → CVSS**, e só os 10 de maior prioridade por tecnologia aparecem. Assim um CVSS 7,5 com EPSS 97% passa à frente de um CVSS 9,8 com EPSS 0,1%. Ambas as fontes são gratuitas, ficam em cache por 24h e, se falharem, o scan segue com o CVSS e um achado informando. Para rodar offline: `WVS_THREAT_INTEL=0`.
 
 ## Instalação
 
@@ -184,7 +200,7 @@ Testes: `pip install -r requirements-dev.txt && pytest tests -q`
 - [x] Modo assíncrono (`asyncio` + `httpx`), rate limit, retry, proxy
 - [x] Relatórios Markdown, JSON versionado, SARIF e HTML
 - [x] Enumeração passiva de subdomínios (crt.sh)
-- [ ] Priorização de CVEs com EPSS e CISA KEV
+- [x] Priorização de CVEs com EPSS e CISA KEV
 - [ ] Detecção de WAF/CDN
 - [ ] Port scan (módulo ativo, atrás de `--allow-active` e arquivo de escopo)
 - [ ] Arquitetura de plugins (entry points) e `pyproject.toml`
