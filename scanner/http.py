@@ -36,6 +36,7 @@ class ScanConfig:
     max_backoff: float = 30.0
     allow_active: bool = False  # libera checks intrusivos (CheckSpec.active)
     scope: object = None        # scanner.scope.Scope; se definido, é imposto a TODA requisição
+    ports: list = None          # lista de portas para o portscan; None = tabela padrão
 
 
 class RequestFailed(Exception):

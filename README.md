@@ -19,6 +19,8 @@ Use esta ferramenta **somente em sistemas que você possui ou para os quais tem 
 | `exposed_files` | ~25 caminhos sensíveis (`.env`, `.git`, dumps SQL, chaves SSH, backups, Actuator, phpinfo...). **O conteúdo é validado por assinatura** (um 200 não basta), há baseline anti-soft-404 e **segredos são mascarados** na evidência |
 | `misconfig` | HTTP sem redirecionar para HTTPS, `TRACE` habilitado (confirmado por eco), métodos de escrita em `Allow`, listagem de diretório, stack traces/debug em páginas de erro, `security.txt` |
 | `subdomains` | Enumeração **passiva** via Certificate Transparency (crt.sh), resolução DNS, e alertas para nomes como `staging`/`admin`/`vpn` e subdomínios públicos apontando para IPs privados |
+| `portscan` **(ativo)** | Port scan TCP connect numa lista curta (~25) de portas de serviços comuns. Só lê o banner que o próprio serviço envia primeiro; não envia payload. Exige `--allow-active` + `--scope` |
+| `waf_active` **(ativo)** | Confirma WAF ativo com uma sonda (padrão genérico de teste, sem payload funcional) comparada à resposta normal; identifica o fornecedor pela mesma tabela do check passivo. Exige `--allow-active` + `--scope` |
 | `spf` | Existência, sintaxe básica, política final (`-all`/`~all`/`+all`) e limite de 10 consultas DNS |
 | `dkim` | Seletores comuns publicados e chaves revogadas. Não conclusivo quando nada é achado: seletores personalizados não são enumeráveis |
 | `dmarc` | Presença e política (`none`/`quarantine`/`reject`), `pct` e endereço de relatórios (`rua`) |
@@ -119,6 +121,20 @@ python -m scanner.cli -t https://cliente.com -m web --rate 2 --concurrency 4 \
 Se o alvo responde 429, bloqueia a maioria das requisições com 403/406 ou falha repetidamente, o scan **não insiste**: há retry com backoff, um circuit breaker por host e um achado informando que os resultados podem estar incompletos (reduza `--rate`). Timeouts, erros TLS e conexão recusada viram achados classificados, nunca um traceback.
 
 Limitações: o `--proxy` cobre as requisições HTTP ao alvo e à crt.sh; a resolução DNS (subdomínios, SPF/DKIM/DMARC) e a consulta à NVD usam a rede direta.
+
+### Checks ativos: port scan e WAF ativo
+
+`portscan` e `waf_active` enviam tráfego fora do padrão de navegação comum (conexões TCP a portas de serviço, uma requisição com um parâmetro de teste). Por isso:
+
+- **Exigem `--allow-active` e `--scope`**, sempre juntos. Sem os dois, eles nem entram na lista de checks padrão e um `--checks portscan` explícito é recusado.
+- `portscan` faz apenas `connect()` TCP numa lista curta e deliberada de ~25 portas de serviços comuns (bancos de dados, RDP, VNC, SSH, FTP...). Não há SYN scan, não há varredura de 65535 portas, e o único dado lido é o banner que o próprio serviço manda primeiro — nada é escrito na conexão. Restrinja ainda mais com `--ports 22,80,443`.
+- `waf_active` envia **uma** requisição extra com um parâmetro de teste genérico (padrão de path traversal, sem payload funcional, igual ao usado por ferramentas como o wafw00f) e compara com a resposta normal. Se o alvo já bloqueia a resposta normal, a sondagem é abortada como inconclusiva em vez de insistir.
+- Ambos respeitam `--rate`/`--concurrency`/`--timeout` como o resto do scan.
+
+```bash
+wvs -t https://meu-laboratorio.test -m web --checks portscan,waf_active \
+    --allow-active --scope escopo.txt --ports 22,80,443,3306,6379
+```
 
 ### Escopo de engajamento (`--scope`)
 
@@ -257,8 +273,8 @@ Testes: `pip install -r requirements-dev.txt && pytest tests -q`
 - [x] Enumeração passiva de subdomínios (crt.sh)
 - [x] Priorização de CVEs com EPSS e CISA KEV
 - [x] Detecção passiva de WAF/CDN
-- [ ] Detecção ativa de WAF (requisição que provoca bloqueio), atrás de `--allow-active`
-- [ ] Port scan (módulo ativo, atrás de `--allow-active` e arquivo de escopo)
+- [x] Detecção ativa de WAF (`waf_active`), atrás de `--allow-active` + `--scope`
+- [x] Port scan (`portscan`, TCP connect, lista curta de portas), atrás de `--allow-active` + `--scope`
 - [x] Arquitetura de plugins (entry points) e `pyproject.toml`
 - [x] Comparação entre execuções (`--baseline`)
 - [x] Arquivo de escopo (`--scope`), exigido por `--allow-active`

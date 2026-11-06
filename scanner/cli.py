@@ -39,6 +39,8 @@ def build_parser() -> argparse.ArgumentParser:
                         "inclusive redirecionamentos")
     p.add_argument("--allow-active", action="store_true",
                    help="permite checks ativos/intrusivos; exige --scope e autorização expressa do dono do alvo")
+    p.add_argument("--ports", metavar="22,80,443",
+                   help="portas para o check 'portscan' (default: ~25 portas de serviços comuns)")
     p.add_argument("--baseline", metavar="RELATORIO.json",
                    help="compara com um relatório JSON anterior e marca achados novos/resolvidos")
     p.add_argument("--new-only", action="store_true",
@@ -71,6 +73,17 @@ def _format_check_list() -> str:
         rows.append(f"{s.name:<16}{s.category:<10}{'sim' if s.active else 'não':<7}{s.source:<22}"
                     f"{s.description[:70]}")
     return "\n".join(rows)
+
+
+def _parse_ports(raw):
+    try:
+        ports = [int(p.strip()) for p in raw.split(",") if p.strip()]
+    except ValueError:
+        raise ValueError(f"--ports deve ser uma lista de números separados por vírgula, não {raw!r}")
+    invalid = [p for p in ports if not 1 <= p <= 65535]
+    if invalid:
+        raise ValueError(f"--ports fora do intervalo 1-65535: {invalid}")
+    return ports
 
 
 def _parse_headers(raw):
@@ -164,7 +177,7 @@ def main(argv=None) -> int:
             timeout=args.timeout, rate=args.rate, concurrency=args.concurrency, retries=args.retries,
             proxy=args.proxy, headers=_parse_headers(args.header), user_agent=args.user_agent,
             verify=not args.insecure, allow_active=args.allow_active,
-            scope=scope)
+            scope=scope, ports=_parse_ports(args.ports) if args.ports else None)
     except ValueError as e:
         print(f"Erro: {e}", file=sys.stderr)
         return 2

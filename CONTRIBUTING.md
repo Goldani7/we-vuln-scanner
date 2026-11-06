@@ -69,9 +69,12 @@ têm nome repetido ou não apontam para um `CheckSpec` são **ignorados com um a
 
 ## Checks ativos
 
-Qualquer check que envie tráfego intrusivo (payloads, varredura de portas) deve declarar `active=True`.
-Ele fica fora dos padrões e só roda com `--allow-active`, para que ninguém dispare um teste intrusivo sem
-querer. Use apenas em alvos com autorização expressa.
+Qualquer check que envie tráfego fora do padrão de navegação comum (payloads de teste, varredura de
+portas) deve declarar `active=True` no `CheckSpec`. Exemplos já no projeto: `portscan` (TCP connect) e
+`waf_active` (sondagem com padrão de teste). Eles ficam fora dos padrões e só rodam com `--allow-active`
+**e** `--scope` juntos — a CLI recusa `--allow-active` sem escopo. Use apenas em alvos com autorização
+expressa; se o check usa sockets fora do cliente HTTP (como `portscan`), verifique o escopo manualmente
+dentro do check também, como defesa em profundidade.
 
 ## Pull requests
 

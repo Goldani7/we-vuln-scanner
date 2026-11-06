@@ -9,10 +9,12 @@ from .checks.email_dns import check_dkim, check_dmarc, check_dnsbl, check_spf
 from .checks.exposed_files import check_exposed_files
 from .checks.headers import check_headers
 from .checks.misconfig import check_misconfig
+from .checks.portscan import check_portscan
 from .checks.ssl_tls import check_ssl_tls
 from .checks.subdomains import check_subdomains
 from .checks.tech_detection import check_tech_detection
 from .checks.waf import check_waf
+from .checks.waf_active import check_waf_active
 from .finding import Finding, Severity
 from .http import HttpClient, RequestFailed, ScanConfig, ScanContext
 from .registry import CheckSpec, Registry
@@ -47,6 +49,12 @@ for _spec in (
               "com stack trace, que vazam informação sobre o servidor."),
     CheckSpec("subdomains", "async", check_subdomains, "recon",
               "Enumeração passiva de subdomínios via Certificate Transparency (crt.sh)."),
+    CheckSpec("portscan", "async", check_portscan, "web",
+              "Port scan TCP connect numa lista curta de portas comuns. ATIVO: exige --allow-active "
+              "e --scope.", active=True),
+    CheckSpec("waf_active", "async", check_waf_active, "web",
+              "Sondagem ativa de WAF com um padrão de teste conhecido (sem payload funcional). "
+              "ATIVO: exige --allow-active e --scope.", active=True),
     CheckSpec("spf", "domain", check_spf, "email", "SPF: autoriza quais servidores enviam e-mail pelo domínio."),
     CheckSpec("dkim", "domain", check_dkim, "email", "DKIM: assinatura criptográfica dos e-mails enviados."),
     CheckSpec("dmarc", "domain", check_dmarc, "email", "DMARC: política contra e-mails falsificados."),
