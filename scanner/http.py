@@ -18,6 +18,8 @@ from . import __version__
 
 DEFAULT_USER_AGENT = f"web-vuln-scanner/{__version__}"
 RETRY_STATUSES = {429, 502, 503, 504}
+# Serviços públicos passivos consultados no lugar do alvo (não são o alvo, ficam fora do escopo).
+PASSIVE_SERVICES = {"crt.sh"}
 CIRCUIT_THRESHOLD = 8  # falhas consecutivas num host antes de parar de tentar
 
 
@@ -33,11 +35,12 @@ class ScanConfig:
     verify: bool = True
     max_backoff: float = 30.0
     allow_active: bool = False  # libera checks intrusivos (CheckSpec.active)
+    scope: object = None        # scanner.scope.Scope; se definido, é imposto a TODA requisição
 
 
 class RequestFailed(Exception):
     """Falha de rede classificada. `kind`: timeout | tls | connect | proxy | redirects |
-    circuit_open | network."""
+    circuit_open | out_of_scope | network."""
 
     def __init__(self, kind: str, url: str, message: str):
         super().__init__(message)
@@ -100,12 +103,21 @@ class HttpClient:
         self._sem = asyncio.Semaphore(max(1, self.config.concurrency))
         self._sleep = sleep
         self._failures = {}  # host -> falhas consecutivas
-        self.stats = {"requests": 0, "retries": 0, "throttled": 0, "forbidden": 0, "failures": 0}
+        self.stats = {"requests": 0, "retries": 0, "throttled": 0, "forbidden": 0, "failures": 0, "out_of_scope": 0}
         headers = {"User-Agent": self.config.user_agent, **self.config.headers}
         self._client = httpx.AsyncClient(
             headers=headers, proxy=self.config.proxy, verify=self.config.verify,
             timeout=self.config.timeout, transport=transport, follow_redirects=False,
+            # O hook roda a cada requisição, inclusive em cada salto de redirecionamento.
+            event_hooks={"request": [self._enforce_scope]},
         )
+
+    async def _enforce_scope(self, request: httpx.Request):
+        scope, host = self.config.scope, request.url.host
+        if scope is not None and host not in PASSIVE_SERVICES and not scope.allows(host):
+            self.stats["out_of_scope"] += 1
+            raise RequestFailed("out_of_scope", str(request.url),
+                                f"{host} está fora do escopo ({scope.source or 'arquivo de escopo'}); requisição bloqueada")
 
     async def __aenter__(self):
         return self
@@ -145,6 +157,8 @@ class HttpClient:
                     response = await self._client.request(
                         method, url, headers=headers, timeout=timeout or self.config.timeout,
                         follow_redirects=follow_redirects)
+                except RequestFailed:  # bloqueio de escopo: definitivo, sem retry nem circuit breaker
+                    raise
                 except httpx.HTTPError as e:
                     error = classify_error(e, url)
                 except httpx.InvalidURL as e:

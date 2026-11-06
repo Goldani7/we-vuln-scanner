@@ -100,7 +100,8 @@ python -m scanner.cli -t https://cliente.com -m web --rate 2 --concurrency 4 \
 | `--checks`, `--no-info`, `-v` | Checks web a executar, ocultar INFO, logs de depuração |
 | `--list-checks` | Lista os checks disponíveis, incluindo plugins, e sai |
 | `--baseline`, `--new-only` | Compara com um relatório JSON anterior; `--new-only` mostra e avalia `--fail-on` só nos achados novos |
-| `--allow-active` | Libera checks ativos/intrusivos (nenhum embutido por enquanto; exige autorização expressa do dono do alvo) |
+| `--scope` | Arquivo com os alvos autorizados. O alvo e **toda requisição**, inclusive redirecionamentos, são verificados contra ele |
+| `--allow-active` | Libera checks ativos/intrusivos (nenhum embutido por enquanto). **Exige `--scope`** e autorização expressa do dono do alvo |
 
 **Rede e desempenho:**
 
@@ -118,6 +119,28 @@ python -m scanner.cli -t https://cliente.com -m web --rate 2 --concurrency 4 \
 Se o alvo responde 429, bloqueia a maioria das requisições com 403/406 ou falha repetidamente, o scan **não insiste**: há retry com backoff, um circuit breaker por host e um achado informando que os resultados podem estar incompletos (reduza `--rate`). Timeouts, erros TLS e conexão recusada viram achados classificados, nunca um traceback.
 
 Limitações: o `--proxy` cobre as requisições HTTP ao alvo e à crt.sh; a resolução DNS (subdomínios, SPF/DKIM/DMARC) e a consulta à NVD usam a rede direta.
+
+### Escopo de engajamento (`--scope`)
+
+Em um pentest, testar um host que não está no contrato é um problema jurídico, não só técnico. O arquivo de escopo faz a ferramenta **recusar** o que não foi autorizado:
+
+```text
+# escopo.txt (uma entrada por linha)
+exemplo.com            # apenas este host
+*.api.exemplo.com      # qualquer subdomínio (não inclui api.exemplo.com)
+203.0.113.0/24         # faixa de IPs (casa com alvos informados como IP)
+!interno.api.exemplo.com   # exclusão: vence qualquer inclusão
+```
+
+```bash
+wvs -t https://exemplo.com --scope escopo.txt -o relatorio.md
+```
+
+- Alvo fora do escopo: a ferramenta sai com código 2 **antes de enviar qualquer requisição**.
+- O escopo é imposto no cliente HTTP a cada requisição, **inclusive em cada salto de redirecionamento**: um `302` para um host não listado é bloqueado e o relatório avisa. Não há `--no-scope` nem como burlar por checks ou plugins, pois eles usam o mesmo cliente.
+- Só a crt.sh (serviço público passivo, não é o alvo) fica fora da checagem.
+- Limitações: entradas CIDR só casam com alvos dados como IP (um nome de domínio não é resolvido para conferir faixa); as consultas DNS (SPF/DKIM/DMARC e resolução de subdomínios) e a TLS direta ao alvo não passam pelo cliente HTTP.
+- `--allow-active` só funciona junto de `--scope`.
 
 ### Comparação entre execuções (`--baseline`)
 
@@ -214,6 +237,7 @@ web-vuln-scanner/
     baseline.py  comparação entre execuções
     threatintel.py  EPSS e CISA KEV
     report.py    texto, JSON versionado, Markdown, SARIF 2.1.0, HTML
+    scope.py     arquivo de escopo imposto a toda requisição
     cli.py   nvd.py
     checks/      headers, cookies, tech_detection, ssl_tls, cors, exposed_files,
                  misconfig, subdomains, email_dns
@@ -237,7 +261,7 @@ Testes: `pip install -r requirements-dev.txt && pytest tests -q`
 - [ ] Port scan (módulo ativo, atrás de `--allow-active` e arquivo de escopo)
 - [x] Arquitetura de plugins (entry points) e `pyproject.toml`
 - [x] Comparação entre execuções (`--baseline`)
-- [ ] Arquivo de escopo (`--scope`) obrigatório para checks ativos
+- [x] Arquivo de escopo (`--scope`), exigido por `--allow-active`
 - [ ] CI no GitHub Actions (pytest em Python 3.10 a 3.14)
 
 ## Disclaimer

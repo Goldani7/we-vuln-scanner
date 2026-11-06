@@ -127,14 +127,16 @@ def test_list_checks_needs_no_target_and_shows_plugin_source(capsys):
     assert "exposed_files" in out and "builtin" in out and "ORIGEM" in out
 
 
-def test_active_checks_require_allow_active(capsys):
+def test_active_checks_require_allow_active(capsys, tmp_path):
+    scope = tmp_path / "scope.txt"
+    scope.write_text("ex.com\n")
     from scanner.core import REGISTRY
     from scanner.registry import CheckSpec
     REGISTRY.register(CheckSpec("zz_intrusive", "response", lambda r: [], "web", "x", active=True))
     try:
         code, m = run(["-t", "ex.com", "--checks", "zz_intrusive"])
         assert code == 2 and not m.called and "--allow-active" in capsys.readouterr().err
-        code, m = run(["-t", "ex.com", "--checks", "zz_intrusive", "--allow-active"])
+        code, m = run(["-t", "ex.com", "--checks", "zz_intrusive", "--allow-active", "--scope", str(scope)])
         assert code == 0 and m.call_args.kwargs["config"].allow_active is True
     finally:
         del REGISTRY._specs["zz_intrusive"]

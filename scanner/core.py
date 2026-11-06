@@ -95,6 +95,17 @@ def _looks_blocked(s: dict) -> bool:
     return s["forbidden"] >= 10 and s["forbidden"] >= 0.5 * s["requests"]
 
 
+def _scope_notice(client: HttpClient) -> list:
+    n = client.stats["out_of_scope"]
+    if not n:
+        return []
+    return [Finding(
+        "core", Severity.INFO, f"{n} requisição(ões) bloqueada(s) por estarem fora do escopo",
+        "O alvo redirecionou (ou um check tentou alcançar) um host que não está no arquivo de escopo; "
+        "a requisição NÃO foi enviada.", "Se o host também é autorizado, adicione-o ao arquivo de escopo.",
+        dict(client.stats), rule_id="core.out-of-scope", confidence="high")]
+
+
 def _rate_limit_notice(client: HttpClient) -> list:
     s = client.stats
     if not s["throttled"] and not s["failures"] and not _looks_blocked(s):
@@ -117,6 +128,12 @@ async def scan_web_async(ctx: ScanContext, checks) -> list:
     try:
         response = await ctx.index() if any(c in RESPONSE_CHECKS for c in checks) else None
     except RequestFailed as e:
+        if e.kind == "out_of_scope":  # restrição do scan, não uma vulnerabilidade do alvo
+            return [Finding("core", Severity.INFO, "Redirecionamento para fora do escopo bloqueado", str(e),
+                            "Se o host de destino também é autorizado, adicione-o ao arquivo de escopo; "
+                            "caso contrário, aponte o scan para a URL final dentro do escopo.",
+                            evidence=f"GET {ctx.url} → {e.describe()}", rule_id="core.connect-out_of_scope",
+                            confidence="high")]
         return [Finding("core", Severity.HIGH, f"Falha ao conectar ao alvo ({e.kind})", str(e),
                         "Verifique a URL, o certificado (use --insecure só para diagnóstico) e a disponibilidade.",
                         evidence=f"GET {ctx.url} → {e.describe()}", rule_id=f"core.connect-{e.kind}",
@@ -163,6 +180,7 @@ async def scan_target_async(target: str, mode: str = "full", web_checks=None,
         for group in await asyncio.gather(*jobs):
             findings.extend(group)
         findings.extend(_rate_limit_notice(client))
+        findings.extend(_scope_notice(client))
     return _tag(findings, url)
 
 

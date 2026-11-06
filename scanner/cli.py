@@ -4,8 +4,9 @@ import os
 import sys
 
 from .baseline import BaselineError, annotate, compare, load_baseline
-from .core import MODES, REGISTRY, scan_target
+from .core import MODES, REGISTRY, extract_domain, scan_target
 from .http import DEFAULT_USER_AGENT, ScanConfig
+from .scope import ScopeError, load_scope
 from .report import to_html, to_json, to_markdown, to_sarif, to_text
 
 EXTENSION_FORMATS = {".json": "json", ".html": "html", ".htm": "html", ".md": "md",
@@ -33,8 +34,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-v", "--verbose", action="store_true", help="mostra logs de depuração")
     p.add_argument("--checks", help="checks web separados por vírgula (default: todos; veja --list-checks)")
     p.add_argument("--list-checks", action="store_true", help="lista os checks disponíveis (inclui plugins) e sai")
+    p.add_argument("--scope", metavar="ESCOPO.txt",
+                   help="arquivo com os alvos autorizados; toda requisição fora dele é bloqueada, "
+                        "inclusive redirecionamentos")
     p.add_argument("--allow-active", action="store_true",
-                   help="permite checks ativos/intrusivos (só em alvos com autorização expressa)")
+                   help="permite checks ativos/intrusivos; exige --scope e autorização expressa do dono do alvo")
     p.add_argument("--baseline", metavar="RELATORIO.json",
                    help="compara com um relatório JSON anterior e marca achados novos/resolvidos")
     p.add_argument("--new-only", action="store_true",
@@ -109,6 +113,22 @@ def main(argv=None) -> int:
         parser.error("informe o alvo com --target/-t")
     if args.new_only and not args.baseline:
         parser.error("--new-only exige --baseline")
+    if args.allow_active and not args.scope:
+        parser.error("--allow-active exige --scope: checks intrusivos só rodam contra alvos "
+                     "explicitamente listados no arquivo de escopo")
+
+    scope = None
+    if args.scope:
+        try:
+            scope = load_scope(args.scope)
+        except ScopeError as e:
+            print(f"Erro: {e}", file=sys.stderr)
+            return 2
+        host = extract_domain(target)
+        if not scope.allows(host):
+            print(f"Erro: o alvo '{host}' está FORA do escopo definido em {args.scope}. "
+                  "Nenhuma requisição foi enviada.", file=sys.stderr)
+            return 2
 
     fmt = _resolve_format(args)
     if fmt is None:
@@ -143,13 +163,16 @@ def main(argv=None) -> int:
         config = ScanConfig(
             timeout=args.timeout, rate=args.rate, concurrency=args.concurrency, retries=args.retries,
             proxy=args.proxy, headers=_parse_headers(args.header), user_agent=args.user_agent,
-            verify=not args.insecure, allow_active=args.allow_active)
+            verify=not args.insecure, allow_active=args.allow_active,
+            scope=scope)
     except ValueError as e:
         print(f"Erro: {e}", file=sys.stderr)
         return 2
 
     findings = scan_target(target, mode=args.mode, web_checks=checks, config=config)
     meta = {"target": target, "mode": args.mode}
+    if scope:
+        meta["scope"] = args.scope
     if baseline is not None:
         comparison = compare(findings, baseline, args.baseline)
         findings = annotate(findings, comparison)
