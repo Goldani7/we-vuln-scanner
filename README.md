@@ -262,7 +262,7 @@ Testes: `pip install -r requirements-dev.txt && pytest tests -q`
 - [x] Arquitetura de plugins (entry points) e `pyproject.toml`
 - [x] Comparação entre execuções (`--baseline`)
 - [x] Arquivo de escopo (`--scope`), exigido por `--allow-active`
-- [ ] CI no GitHub Actions (pytest em Python 3.10 a 3.14)
+- [x] CI no GitHub Actions (pytest em Python 3.10 a 3.14, mais o plugin de exemplo)
 
 ## Disclaimer
 
