@@ -70,6 +70,19 @@ O CVSS mede a gravidade técnica, não a chance de uso real. Cada CVE encontrado
 
 Os CVEs são ordenados por **KEV → EPSS → CVSS**, e só os 10 de maior prioridade por tecnologia aparecem. Assim um CVSS 7,5 com EPSS 97% passa à frente de um CVSS 9,8 com EPSS 0,1%. Ambas as fontes são gratuitas, ficam em cache por 24h e, se falharem, o scan segue com o CVSS e um achado informando. Para rodar offline: `WVS_THREAT_INTEL=0`.
 
+## Instalação rápida (menu interativo)
+
+```bash
+git clone https://github.com/Goldani7/we-vuln-scanner.git
+cd we-vuln-scanner
+bash install.sh
+```
+
+O `install.sh` cria o venv, instala tudo e pergunta se você quer abrir o menu interativo
+(`goldani`) na hora. O menu pergunta só o essencial — alvo, modo, e se quer habilitar os checks
+ativos (pedindo o arquivo de escopo) — e por baixo roda exatamente o mesmo `wvs`/`scanner.cli`
+de sempre: nenhuma validação de segurança é duplicada ou contornada por ele.
+
 ## Instalação
 
 ```bash

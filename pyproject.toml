@@ -22,6 +22,7 @@ dev = ["pytest>=8.0.0", "fastapi>=0.110.0", "uvicorn>=0.27.0", "slowapi>=0.1.9"]
 
 [project.scripts]
 wvs = "scanner.cli:main"
+goldani = "scanner.menu:main"
 web-vuln-scanner = "scanner.cli:main"
 
 [tool.setuptools.dynamic]
