@@ -5,3 +5,6 @@ __pycache__/
 .pytest_cache/
 relatorio.json
 *.log
+.coverage
+htmlcov/
+wvs-results.sarif

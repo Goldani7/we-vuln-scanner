@@ -3,10 +3,8 @@ import ssl
 import time
 
 import httpx
-import pytest
 
-from scanner.http import (CIRCUIT_THRESHOLD, HttpClient, RateLimiter, RequestFailed, ScanConfig,
-                          classify_error)
+from scanner.http import CIRCUIT_THRESHOLD, HttpClient, RateLimiter, RequestFailed, ScanConfig, classify_error
 
 
 def run_client(handler, config=None, calls=None, **kw):

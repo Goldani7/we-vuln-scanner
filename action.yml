@@ -1,0 +1,59 @@
+name: "Goldani Scanner"
+description: "Passive web and email/DNS vulnerability scan, with SARIF output for GitHub Code Scanning"
+branding:
+  icon: shield
+  color: blue
+inputs:
+  target:
+    description: "URL or domain to scan (must be a system you are authorized to test)"
+    required: true
+  mode:
+    description: "web | email | recon | full"
+    default: "web"
+  fail-on:
+    description: "Fail the step if a finding of this severity or higher exists (critical|high|medium|low|none)"
+    default: "high"
+  sarif-file:
+    description: "Where to write the SARIF report"
+    default: "wvs-results.sarif"
+  upload-sarif:
+    description: "Upload the SARIF to GitHub Code Scanning (needs `security-events: write`)"
+    default: "false"
+  extra-args:
+    description: "Extra arguments for wvs (e.g. --baseline previous.json --new-only)"
+    default: ""
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - name: Install scanner
+      shell: bash
+      run: python -m pip install "${{ github.action_path }}"
+    - name: Scan
+      id: scan
+      shell: bash
+      env:
+        WVS_TARGET: ${{ inputs.target }}
+        WVS_MODE: ${{ inputs.mode }}
+        WVS_FAIL_ON: ${{ inputs.fail-on }}
+        WVS_SARIF: ${{ inputs.sarif-file }}
+        WVS_EXTRA: ${{ inputs.extra-args }}
+      run: |
+        # Inputs go through env vars (never interpolated into the script) to avoid shell injection.
+        set +e
+        # shellcheck disable=SC2086
+        wvs -t "$WVS_TARGET" -m "$WVS_MODE" --fail-on "$WVS_FAIL_ON" -o "$WVS_SARIF" $WVS_EXTRA
+        echo "exit-code=$?" >> "$GITHUB_OUTPUT"
+    - name: Upload SARIF
+      if: inputs.upload-sarif == 'true'
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ inputs.sarif-file }}
+    - name: Fail on findings
+      if: steps.scan.outputs.exit-code != '0'
+      shell: bash
+      run: |
+        echo "::error::wvs exited with code ${{ steps.scan.outputs.exit-code }} (findings at or above --fail-on)"
+        exit 1

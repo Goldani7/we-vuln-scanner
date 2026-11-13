@@ -86,6 +86,17 @@ After `pip install`, confirm with `wvs --list-checks` (the SOURCE column shows `
 An entry point can also point to a **list** of `CheckSpec`. Plugins that fail to load, repeat a
 name, or don't point to a `CheckSpec` are **skipped with a warning**: they never take down the scan.
 
+## Config file, target lists and custom probes
+
+- `--config wvs.toml`: any long flag as a key (`rate = 5`, `mode = "web"`, `header = ["X-A: 1"]`, `ports = [22, 80]`). Unknown keys and wrong types are errors; command-line flags override the file.
+- `-T targets.txt`: one target per line (`#` comments). With `--scope`, scanning is all-or-nothing: if any target is out of scope, nothing is sent.
+- `--probes-file probes.json`: extra exposed-file signatures, no Python needed. `regex` is mandatory (a probe without a content signature only produces false positives):
+
+```json
+[{"path": "/config.old", "title": "Old config exposed", "severity": "high",
+  "regex": "DB_PASSWORD\\s*=", "mask": true, "rule": "custom.config-old", "cwe": "CWE-538"}]
+```
+
 ## Active checks
 
 Any check that sends traffic outside normal browsing patterns (test payloads, port scanning) must

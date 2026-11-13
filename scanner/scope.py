@@ -74,7 +74,7 @@ def parse_scope(text: str, source: str = "") -> Scope:
                     hosts.add(str(ipaddress.ip_address(entry)))
                 except ValueError:
                     if not _HOST.match(entry):
-                        raise ValueError("invalid host")
+                        raise ValueError("invalid host") from None
                     if entry.startswith("*."):
                         wildcards.add(entry[2:])
                     else:

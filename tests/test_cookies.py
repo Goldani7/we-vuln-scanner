@@ -1,7 +1,7 @@
+import httpx
+
 from scanner.checks.cookies import check_cookies
 from scanner.finding import Severity
-
-import httpx
 
 
 def _resp(*set_cookies):

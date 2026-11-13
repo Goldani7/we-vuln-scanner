@@ -1,15 +1,14 @@
 import asyncio
+from unittest.mock import patch
 
 import httpx
 import pytest
 
 from scanner.cli import main
 from scanner.core import scan_target_async
-from scanner.finding import Finding, Severity
+from scanner.finding import Severity
 from scanner.http import HttpClient, RequestFailed, ScanConfig
 from scanner.scope import ScopeError, load_scope, parse_scope
-
-from unittest.mock import patch
 
 SCOPE = """
 # ACME-42 engagement
