@@ -181,3 +181,16 @@ def test_builtin_new_probes_reject_soft_404():
     spa = lambda req: httpx.Response(200, text="<!doctype html><html>app</html>", headers={"content-type": "text/html"})
     found = run_check(check_exposed_files, spa)
     assert [f.rule for f in found] == ["exposed.none"]
+
+
+def test_open_redirect_title_names_the_vulnerable_param_not_the_first_one():
+    html = '<html><a href="/go?id=7&next=/x">a</a></html>'
+
+    def handler(req):
+        if req.url.path == "/" and not req.url.query:
+            return httpx.Response(200, text=html, headers={"content-type": "text/html"})
+        if req.url.path == "/go" and req.url.params.get("next"):
+            return httpx.Response(302, headers={"location": req.url.params["next"]})
+        return httpx.Response(200, text="ok")
+    f = run_check(check_open_redirect, handler)
+    assert f[0].rule == "redirect.open" and "'next'" in f[0].title and "'id'" not in f[0].title
