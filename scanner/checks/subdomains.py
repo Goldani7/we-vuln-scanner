@@ -59,12 +59,9 @@ def _is_ip_or_local(host: str) -> bool:
         return "." not in host
 
 
-async def check_subdomains(ctx) -> list:
+async def _fetch_ct(ctx):
+    """(names, reason): the CT subdomain list, or (None, why it is unavailable)."""
     domain = ctx.domain
-    if _is_ip_or_local(domain):
-        return [Finding(CHECK, Severity.INFO, "Subdomain enumeration skipped",
-                        f"'{domain}' is an IP or a local name, with no Certificate Transparency.",
-                        rule_id="subdomains.skipped")]
     try:
         r = await ctx.client.request("GET", CRT_URL.format(domain=domain), timeout=30,
                                      follow_redirects=True)
@@ -74,11 +71,30 @@ async def check_subdomains(ctx) -> list:
     if payload is None:
         reason = r.describe() if isinstance(r, RequestFailed) else (
             f"HTTP {r.status_code}" if hasattr(r, "status_code") else str(r))
+        return None, reason
+    return parse_crtsh(payload, domain), ""
+
+
+async def fetch_ct_names(ctx):
+    """Memoized per scan: `subdomains` and `subdomain_takeover` share ONE crt.sh query."""
+    fut = ctx.shared.get("ct")
+    if fut is None:
+        fut = ctx.shared["ct"] = asyncio.ensure_future(_fetch_ct(ctx))
+    return await fut
+
+
+async def check_subdomains(ctx) -> list:
+    domain = ctx.domain
+    if _is_ip_or_local(domain):
+        return [Finding(CHECK, Severity.INFO, "Subdomain enumeration skipped",
+                        f"'{domain}' is an IP or a local name, with no Certificate Transparency.",
+                        rule_id="subdomains.skipped")]
+    names, reason = await fetch_ct_names(ctx)
+    if names is None:
         return [Finding(CHECK, Severity.INFO, "crt.sh unavailable; subdomains not enumerated",
                         f"Could not query crt.sh ({reason}). The service is known to be "
                         "unstable.", "Try again later.", rule_id="subdomains.unavailable")]
 
-    names = parse_crtsh(payload, domain)
     if not names:
         return [Finding(CHECK, Severity.INFO, "No subdomains in Certificate Transparency",
                         f"crt.sh returned no certificates for subdomains of {domain}.",

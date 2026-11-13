@@ -3,63 +3,15 @@ import dataclasses
 import logging
 from urllib.parse import urlparse
 
-from .checks.cookies import check_cookies
-from .checks.cors import check_cors
-from .checks.email_dns import check_dkim, check_dmarc, check_dnsbl, check_spf
-from .checks.exposed_files import check_exposed_files
-from .checks.headers import check_headers
-from .checks.misconfig import check_misconfig
-from .checks.portscan import check_portscan
-from .checks.ssl_tls import check_ssl_tls
-from .checks.subdomains import check_subdomains
-from .checks.tech_detection import check_tech_detection
-from .checks.waf import check_waf
-from .checks.waf_active import check_waf_active
+from .builtin_checks import BUILTIN_SPECS
 from .finding import Finding, Severity
 from .http import HttpClient, RequestFailed, ScanConfig, ScanContext
-from .registry import CheckSpec, Registry
+from .registry import Registry
 
 log = logging.getLogger(__name__)
 
 REGISTRY = Registry()
-for _spec in (
-    CheckSpec("headers", "response", check_headers, "web",
-              "Checks security headers (CSP, HSTS, X-Frame-Options...). They tell the browser to "
-              "block XSS, clickjacking and HTTP downgrade."),
-    CheckSpec("cookies", "response", check_cookies, "web",
-              "Checks the Secure, HttpOnly and SameSite cookie flags. Without them, session cookies "
-              "can be stolen via XSS, an insecure network, or CSRF."),
-    CheckSpec("tech_detection", "response", check_tech_detection, "web",
-              "Detects software/version exposed in Server/X-Powered-By and looks up CVEs in the NVD, "
-              "prioritized by EPSS and CISA KEV."),  # queries the NVD (requests): runs in a thread
-    CheckSpec("waf", "response", check_waf, "web",
-              "Passively identifies WAF/CDN (Cloudflare, Akamai, CloudFront...) from headers, cookies "
-              "and block pages. The edge masks the origin and may filter findings."),
-    CheckSpec("ssl_tls", "url", check_ssl_tls, "web",
-              "Checks the TLS versions accepted and the certificate's validity. Old protocols and "
-              "expired certificates allow interception and break trust."),
-    CheckSpec("cors", "async", check_cors, "web",
-              "Tests whether CORS accepts arbitrary origins. A permissive policy lets malicious sites "
-              "read the user's authenticated responses."),
-    CheckSpec("exposed_files", "async", check_exposed_files, "web",
-              "Looks for common sensitive files (.env, .git, backups) and validates the content to "
-              "avoid false positives. They tend to leak credentials and source code."),
-    CheckSpec("misconfig", "async", check_misconfig, "web",
-              "Checks HTTP->HTTPS redirection, the TRACE method, directory listing, and error pages "
-              "with a stack trace, which leak information about the server."),
-    CheckSpec("subdomains", "async", check_subdomains, "recon",
-              "Passive subdomain enumeration via Certificate Transparency (crt.sh)."),
-    CheckSpec("portscan", "async", check_portscan, "web",
-              "TCP-connect port scan over a short list of common ports. ACTIVE: requires "
-              "--allow-active and --scope.", active=True),
-    CheckSpec("waf_active", "async", check_waf_active, "web",
-              "Active WAF probe using a known, non-functional test pattern. "
-              "ACTIVE: requires --allow-active and --scope.", active=True),
-    CheckSpec("spf", "domain", check_spf, "email", "SPF: which servers are authorized to send email for the domain."),
-    CheckSpec("dkim", "domain", check_dkim, "email", "DKIM: cryptographic signature of outgoing email."),
-    CheckSpec("dmarc", "domain", check_dmarc, "email", "DMARC: policy against spoofed email."),
-    CheckSpec("dnsbl", "domain", check_dnsbl, "email", "Reputation of the mail servers on DNSBL lists."),
-):
+for _spec in BUILTIN_SPECS:
     REGISTRY.register(_spec)
 REGISTRY.load_plugins()  # third-party checks via the "wvs.checks" entry point
 
@@ -133,6 +85,27 @@ def _rate_limit_notice(client: HttpClient) -> list:
         f"failure(s), {s['retries']} retry(ies) out of {s['requests']} request(s).",
         "Lower --rate and --concurrency, or arrange an allowlist for your IP with the client.",
         dict(s), rule_id="core.throttled", confidence="high")]
+
+
+async def _gather_with_deadline(jobs, max_duration) -> list:
+    """Runs the jobs concurrently. With a deadline, whatever finished is kept and the rest is
+    cancelled (and reported), so a slow target can't hold the scan (or an API worker) forever."""
+    if not max_duration:
+        return [f for group in await asyncio.gather(*jobs) for f in group]
+    tasks = [asyncio.ensure_future(j) for j in jobs]
+    done, pending = await asyncio.wait(tasks, timeout=max_duration)
+    for t in pending:
+        t.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+    findings = [f for t in done for f in t.result()]
+    if pending:
+        findings.append(Finding(
+            "core", Severity.INFO, "Scan deadline reached; results are incomplete",
+            f"{len(pending)} group(s) of checks were cancelled after {max_duration:g}s.",
+            "Raise the deadline, narrow --checks, or lower the target's latency impact.",
+            rule_id="core.deadline", confidence="high"))
+    return findings
 
 
 def default_web_checks(config: ScanConfig) -> list:
@@ -209,8 +182,7 @@ async def scan_target_async(target: str, mode: str = "full", web_checks=None,
             jobs.extend(_safe(name, ASYNC_CHECKS[name](ctx), progress_cb) for name in RECON_CHECKS)
         if mode in ("email", "full"):
             jobs.append(scan_email_async(extract_domain(target), config, progress_cb=progress_cb))
-        for group in await asyncio.gather(*jobs):
-            findings.extend(group)
+        findings.extend(await _gather_with_deadline(jobs, config.max_duration))
         findings.extend(_rate_limit_notice(client))
         findings.extend(_scope_notice(client))
     return _tag(findings, url)

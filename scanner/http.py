@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 import httpx
 
 from . import __version__
+from .netguard import resolve_blocked_async
 
 DEFAULT_USER_AGENT = f"web-vuln-scanner/{__version__}"
 RETRY_STATUSES = {429, 502, 503, 504}
@@ -37,6 +38,9 @@ class ScanConfig:
     allow_active: bool = False  # unlocks intrusive checks (CheckSpec.active)
     scope: object = None        # scanner.scope.Scope; if set, enforced on EVERY request
     ports: list = None          # port list for portscan; None = default table
+    public_only: bool = False   # anti-SSRF: refuse private/loopback/link-local IPs on EVERY request
+    max_duration: float = None  # overall scan deadline in seconds (None = no limit)
+    extra_probes: list = field(default_factory=list)  # user-supplied exposed_files probes (--probes-file)
 
 
 class RequestFailed(Exception):
@@ -115,6 +119,12 @@ class HttpClient:
 
     async def _enforce_scope(self, request: httpx.Request):
         scope, host = self.config.scope, request.url.host
+        if self.config.public_only:
+            bad = await resolve_blocked_async(host)
+            if bad:
+                self.stats["out_of_scope"] += 1
+                raise RequestFailed("out_of_scope", str(request.url),
+                                    f"{host} resolves to an internal address ({bad}); request blocked")
         if scope is not None and host not in PASSIVE_SERVICES and not scope.allows(host):
             self.stats["out_of_scope"] += 1
             raise RequestFailed("out_of_scope", str(request.url),
@@ -141,7 +151,8 @@ class HttpClient:
         return min(cap, 0.5 * 2 ** attempt + random.uniform(0, 0.25))
 
     async def request(self, method: str, url: str, *, headers=None, timeout=None,
-                      follow_redirects: bool = False, retries: int = None) -> httpx.Response:
+                      follow_redirects: bool = False, retries: int = None,
+                      content: bytes = None) -> httpx.Response:
         host = urlparse(url).hostname or url
         if self._failures.get(host, 0) >= CIRCUIT_THRESHOLD:
             raise RequestFailed("circuit_open", url,
@@ -157,7 +168,7 @@ class HttpClient:
                 try:
                     response = await self._client.request(
                         method, url, headers=headers, timeout=timeout or self.config.timeout,
-                        follow_redirects=follow_redirects)
+                        follow_redirects=follow_redirects, content=content)
                 except RequestFailed:  # scope block: final, no retry and no circuit breaker
                     raise
                 except httpx.HTTPError as e:
@@ -196,6 +207,7 @@ class ScanContext:
         self.domain = (urlparse(url).hostname or "").lower()
         self._index = None
         self._index_error = None
+        self.shared = {}  # memo for work several checks need (e.g. the crt.sh subdomain list)
         self._lock = asyncio.Lock()
 
     async def index(self) -> httpx.Response:

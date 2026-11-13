@@ -76,8 +76,10 @@ def test_broken_plugins_are_isolated_and_reported():
 def test_builtin_registry_matches_documented_checks():
     from scanner.core import ALL_CHECKS, EMAIL_CHECKS, RECON_CHECKS, REGISTRY
     assert {"headers", "cookies", "tech_detection", "waf", "ssl_tls", "cors", "exposed_files",
-            "misconfig"} <= set(ALL_CHECKS)
-    assert EMAIL_CHECKS == ["spf", "dkim", "dmarc", "dnsbl"] and RECON_CHECKS == ["subdomains"]
+            "misconfig", "html_security", "js_libs", "dns_security", "api_exposure"} <= set(ALL_CHECKS)
+    assert "open_redirect" not in ALL_CHECKS  # active: only with --allow-active
+    assert EMAIL_CHECKS == ["spf", "dkim", "dmarc", "dnsbl"]
+    assert RECON_CHECKS == ["subdomains", "subdomain_takeover"]
     assert all(REGISTRY.description(n) for n in REGISTRY.names(include_active=True))
 
 
