@@ -92,7 +92,9 @@ def _cve_finding(cve: dict, tech: str, version: str, intel: dict) -> Finding:
     if kev:
         badges.append("CISA KEV")
 
-    evidence = [f"{tech}/{version} (from header) matched {cve['id']} via keyword search on the NVD"]
+    how = ("matched by CPE (the NVD confirms this version is in the affected range)"
+           if cve.get("match") == "cpe" else "matched by keyword search on the NVD (imprecise)")
+    evidence = [f"{tech}/{version} (from header) {how}: {cve['id']}"]
     if kev:
         evidence.append(
             f"CISA KEV: confirmed active exploitation (added {kev['dateAdded']}, due date "
@@ -116,7 +118,9 @@ def _cve_finding(cve: dict, tech: str, version: str, intel: dict) -> Finding:
          "kev": bool(kev), "epss": epss, "epss_percentile": intel.get("percentile")},
         evidence="\n".join(evidence), references=[cve["url"]] + (
             ["https://www.cisa.gov/known-exploited-vulnerabilities-catalog"] if kev else []),
-        confidence="medium" if product_match else "low", rule_id="tech.cve")
+        confidence=("high" if cve.get("match") == "cpe" and product_match
+                    else "medium" if cve.get("match") == "cpe" or product_match else "low"),
+        rule_id="tech.cve")
 
 
 def check_tech_detection(response) -> list:

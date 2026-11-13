@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+import httpx
 import pytest
 
 from scanner import nvd
@@ -81,19 +82,19 @@ def test_query_cves_uses_cache_and_api_key(tmp_path, monkeypatch):
         def raise_for_status(self): pass
         def json(self): return NVD_PAYLOAD
 
-    with patch("scanner.nvd.requests.get", return_value=Resp()) as get:
+    with patch("scanner.nvd.httpx.get", return_value=Resp()) as get:
         first = nvd.query_cves("nginx", "1.18.0")
         second = nvd.query_cves("nginx", "1.18.0")
     assert first == second
-    assert get.call_count == 1  # segunda chamada veio do cache
+    assert get.call_count == 2  # f5 + nginx vendors; the second query_cves() came from the cache
     assert get.call_args.kwargs["headers"] == {"apiKey": "secret"}
-    assert get.call_args.kwargs["params"]["keywordSearch"] == "nginx 1.18.0"
+    # nginx is in the CPE map: precise virtualMatchString, one query per candidate vendor
+    assert get.call_args_list[0].kwargs["params"]["virtualMatchString"] == "cpe:2.3:a:f5:nginx:1.18.0"
 
 
 def test_query_cves_network_error_raises_nvd_error(tmp_path, monkeypatch):
-    import requests
     monkeypatch.setenv("NVD_CACHE_PATH", str(tmp_path / "cache.json"))
-    with patch("scanner.nvd.requests.get", side_effect=requests.Timeout("t")):
+    with patch("scanner.nvd.httpx.get", side_effect=httpx.TimeoutException("t")):
         with pytest.raises(nvd.NVDError):
             nvd.query_cves("nginx", "1.18.0")
 
@@ -150,3 +151,32 @@ def test_intel_failure_is_reported_and_cvss_severity_is_kept():
     assert notice and "EPSS unavailable" in notice[0].detail
     assert [f.severity for f in findings if "cve" in f.metadata] == [
         Severity.CRITICAL, Severity.MEDIUM, Severity.LOW]
+
+
+def test_unknown_tech_falls_back_to_keyword_and_lowers_confidence(tmp_path, monkeypatch):
+    monkeypatch.setenv("NVD_CACHE_PATH", str(tmp_path / "cache.json"))
+
+    class Resp:
+        def raise_for_status(self): pass
+        def json(self): return NVD_PAYLOAD
+
+    with patch("scanner.nvd.httpx.get", return_value=Resp()) as get:
+        cves = nvd.query_cves("obscure-server", "1.0")
+    assert get.call_args.kwargs["params"]["keywordSearch"] == "obscure-server 1.0"
+    assert {c["match"] for c in cves} == {"keyword"}
+
+
+def test_cpe_match_raises_confidence_and_dedupes_across_vendors(tmp_path, monkeypatch):
+    monkeypatch.setenv("NVD_CACHE_PATH", str(tmp_path / "cache.json"))
+
+    class Resp:
+        def raise_for_status(self): pass
+        def json(self): return NVD_PAYLOAD
+
+    with patch("scanner.nvd.httpx.get", return_value=Resp()):
+        cves = nvd.query_cves("nginx", "1.18.0")  # same payload from both vendors
+    assert len(cves) == 3 and {c["match"] for c in cves} == {"cpe"}
+    with patch("scanner.checks.tech_detection.nvd.query_cves", return_value=cves):
+        f = next(x for x in check_tech_detection(FakeResponse({"Server": "nginx/1.18.0"}))
+                 if x.metadata.get("cve") == "CVE-2021-0001")
+    assert f.confidence == "medium" and "matched by CPE" in f.evidence

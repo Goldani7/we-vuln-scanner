@@ -1,7 +1,7 @@
 from unittest.mock import patch
 
+import httpx
 import pytest
-import requests
 
 from scanner import threatintel as ti
 from scanner.finding import Severity
@@ -36,7 +36,7 @@ def _cache(tmp_path, monkeypatch):
 
 
 def test_kev_catalog_parses_keeps_only_known_fields_and_caches():
-    with patch("scanner.threatintel.requests.get", return_value=Resp(KEV_PAYLOAD)) as get:
+    with patch("scanner.threatintel.httpx.get", return_value=Resp(KEV_PAYLOAD)) as get:
         first, second = ti.kev_catalog(), ti.kev_catalog()
     assert get.call_count == 1 and first == second
     assert first["CVE-2021-41773"]["dueDate"] == "2021-11-17" and "notes" not in first["CVE-2021-41773"]
@@ -45,9 +45,9 @@ def test_kev_catalog_parses_keeps_only_known_fields_and_caches():
 def test_epss_scores_batches_and_caches():
     ids = [f"CVE-2020-{i:04d}" for i in range(120)]
 
-    def fake_get(url, params=None, timeout=None):
+    def fake_get(url, params=None, timeout=None, **kw):
         return Resp(epss_payload(**{c: 0.25 for c in params["cve"].split(",")}))
-    with patch("scanner.threatintel.requests.get", side_effect=fake_get) as get:
+    with patch("scanner.threatintel.httpx.get", side_effect=fake_get) as get:
         scores = ti.epss_scores(ids)
         assert get.call_count == 3  # 50 + 50 + 20
         ti.epss_scores(ids)
@@ -56,15 +56,15 @@ def test_epss_scores_batches_and_caches():
 
 
 def test_epss_ids_are_case_insensitive_and_deduplicated():
-    with patch("scanner.threatintel.requests.get", return_value=Resp(epss_payload(**{"CVE-2021-1": 0.1}))) as get:
+    with patch("scanner.threatintel.httpx.get", return_value=Resp(epss_payload(**{"CVE-2021-1": 0.1}))) as get:
         assert "CVE-2021-1" in ti.epss_scores(["cve-2021-1", "CVE-2021-1"])
     assert get.call_args.kwargs["params"]["cve"] == "CVE-2021-1"
 
 
 def test_enrich_combines_sources():
-    def fake_get(url, params=None, timeout=None):
+    def fake_get(url, params=None, timeout=None, **kw):
         return Resp(KEV_PAYLOAD if url == ti.KEV_URL else epss_payload(**{"CVE-2021-41773": 0.99992}))
-    with patch("scanner.threatintel.requests.get", side_effect=fake_get):
+    with patch("scanner.threatintel.httpx.get", side_effect=fake_get):
         info, warnings = ti.enrich(["CVE-2021-41773", "CVE-2099-0001"])
     assert warnings == []
     assert info["CVE-2021-41773"]["kev"]["vendorProject"] == "Apache"
@@ -73,31 +73,31 @@ def test_enrich_combines_sources():
 
 
 def test_enrich_survives_one_source_failing():
-    def fake_get(url, params=None, timeout=None):
+    def fake_get(url, params=None, timeout=None, **kw):
         if url == ti.KEV_URL:
-            raise requests.Timeout("slow")
+            raise httpx.TimeoutException("slow")
         return Resp(epss_payload(**{"CVE-2021-1": 0.7}))
-    with patch("scanner.threatintel.requests.get", side_effect=fake_get):
+    with patch("scanner.threatintel.httpx.get", side_effect=fake_get):
         info, warnings = ti.enrich(["CVE-2021-1"])
     assert info["CVE-2021-1"]["epss"] == 0.7 and info["CVE-2021-1"]["kev"] is None
     assert len(warnings) == 1 and warnings[0].startswith("CISA KEV unavailable")
 
 
 def test_enrich_never_raises_when_everything_fails():
-    with patch("scanner.threatintel.requests.get", side_effect=requests.ConnectionError("down")):
+    with patch("scanner.threatintel.httpx.get", side_effect=httpx.ConnectError("down")):
         info, warnings = ti.enrich(["CVE-2021-1"])
     assert len(warnings) == 2 and info["CVE-2021-1"]["epss"] is None
 
 
 def test_malformed_payloads_are_errors_not_crashes():
-    with patch("scanner.threatintel.requests.get", return_value=Resp({"unexpected": 1})):
+    with patch("scanner.threatintel.httpx.get", return_value=Resp({"unexpected": 1})):
         _, warnings = ti.enrich(["CVE-2021-1"])
     assert len(warnings) == 1  # malformed KEV; EPSS with no 'data' is simply empty
 
 
 def test_disabled_by_env_makes_no_requests(monkeypatch):
     monkeypatch.setenv("WVS_THREAT_INTEL", "0")
-    with patch("scanner.threatintel.requests.get") as get:
+    with patch("scanner.threatintel.httpx.get") as get:
         assert ti.enrich(["CVE-2021-1"]) == ({}, [])
     assert not get.called
 
