@@ -8,6 +8,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
+from scanner import __version__
 from scanner.core import ALL_CHECKS, REGISTRY, scan
 from scanner.http import ScanConfig
 
@@ -16,7 +17,7 @@ from .validation import validate_public_url
 SCAN_DEADLINE = float(os.environ.get("WVS_API_DEADLINE", "120"))  # seconds, whole scan
 
 limiter = Limiter(key_func=get_remote_address)
-app = FastAPI(title="web-vuln-scanner API", version="0.3.0")
+app = FastAPI(title="web-vuln-scanner API", version=__version__)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
