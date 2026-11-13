@@ -3,11 +3,17 @@ import logging
 import os
 import sys
 
+try:  # stdlib on Python 3.11+, the `tomli` backport on 3.10
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover
+    import tomli as tomllib
+
 from .baseline import BaselineError, annotate, compare, load_baseline
+from .checks.exposed_files import load_probes_file
 from .core import MODES, REGISTRY, extract_domain, planned_checks, scan_target
 from .http import DEFAULT_USER_AGENT, ScanConfig
-from .scope import ScopeError, load_scope
 from .report import to_html, to_json, to_markdown, to_sarif, to_text
+from .scope import ScopeError, load_scope
 
 EXTENSION_FORMATS = {".json": "json", ".html": "html", ".htm": "html", ".md": "md",
                      ".markdown": "md", ".sarif": "sarif"}
@@ -23,6 +29,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("target_pos", nargs="?", metavar="target",
                    help="target (URL or domain); positional alternative to --target")
     p.add_argument("-t", "--target", help="target URL or domain (e.g. https://example.com or example.com)")
+    p.add_argument("-T", "--targets-file", metavar="TARGETS.txt",
+                   help="scan every target listed in this file (one per line, # comments); "
+                        "combinable with -t")
+    p.add_argument("--config", metavar="WVS.toml",
+                   help="TOML file with default options (same names as the flags, e.g. rate = 5); "
+                        "command-line flags win")
     p.add_argument("-m", "--mode", choices=MODES, default="full",
                    help="web = HTTP/TLS checks; email = SPF/DKIM/DMARC/DNSBL; "
                         "recon = subdomains (crt.sh); full = everything (default)")
@@ -45,6 +57,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="allow active/intrusive checks; requires --scope and explicit authorization from the target owner")
     p.add_argument("--ports", metavar="22,80,443",
                    help="ports for the 'portscan' check (default: ~25 common service ports)")
+    p.add_argument("--probes-file", metavar="PROBES.json",
+                   help="extra exposed-file signatures (JSON list: path, title, severity, regex...); "
+                        "see CONTRIBUTING.md")
     p.add_argument("--baseline", metavar="REPORT.json",
                    help="compare against a previous JSON report and mark new/resolved findings")
     p.add_argument("--new-only", action="store_true",
@@ -71,10 +86,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _format_check_list() -> str:
-    rows = [f"{'CHECK':<16}{'CATEGORY':<10}{'ACTIVE':<8}{'SOURCE':<22}DESCRIPTION"]
-    for name in REGISTRY.names(include_active=True):
+    names = REGISTRY.names(include_active=True)
+    w = max([len(n) for n in names] + [5]) + 2
+    rows = [f"{'CHECK':<{w}}{'CATEGORY':<10}{'ACTIVE':<8}{'SOURCE':<22}DESCRIPTION"]
+    for name in names:
         s = REGISTRY.get(name)
-        rows.append(f"{s.name:<16}{s.category:<10}{'yes' if s.active else 'no':<8}{s.source:<22}"
+        rows.append(f"{s.name:<{w}}{s.category:<10}{'yes' if s.active else 'no':<8}{s.source:<22}"
                     f"{s.description[:70]}")
     return "\n".join(rows)
 
@@ -83,7 +100,7 @@ def _parse_ports(raw):
     try:
         ports = [int(p.strip()) for p in raw.split(",") if p.strip()]
     except ValueError:
-        raise ValueError(f"--ports must be a comma-separated list of numbers, not {raw!r}")
+        raise ValueError(f"--ports must be a comma-separated list of numbers, not {raw!r}") from None
     invalid = [p for p in ports if not 1 <= p <= 65535]
     if invalid:
         raise ValueError(f"--ports out of the 1-65535 range: {invalid}")
@@ -100,6 +117,51 @@ def _parse_headers(raw):
     return headers
 
 
+def load_targets_file(path: str) -> list:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = [ln.split("#", 1)[0].strip() for ln in fh]
+    except OSError as e:
+        raise ValueError(f"could not read targets file '{path}': {e.strerror or e}") from e
+    targets = list(dict.fromkeys(ln for ln in lines if ln))  # dedupe, keep order
+    if not targets:
+        raise ValueError(f"targets file '{path}' has no targets")
+    return targets
+
+
+def load_config(path: str, parser: argparse.ArgumentParser) -> dict:
+    """Reads a TOML config and validates it against the parser. Returns {dest: value}."""
+    try:
+        with open(path, "rb") as fh:
+            raw = tomllib.load(fh)
+    except OSError as e:
+        raise ValueError(f"could not read config '{path}': {e.strerror or e}") from e
+    except tomllib.TOMLDecodeError as e:
+        raise ValueError(f"invalid TOML in '{path}': {e}") from e
+    actions = {a.dest: a for a in parser._actions if a.dest not in ("help", "config")}
+    out = {}
+    for key, value in raw.items():
+        dest = key.replace("-", "_")
+        action = actions.get(dest)
+        if action is None:
+            raise ValueError(f"{path}: unknown option '{key}'. Valid: {', '.join(sorted(actions))}")
+        if dest == "ports" and isinstance(value, list):
+            value = ",".join(str(v) for v in value)
+        if action.nargs == 0 or isinstance(action.default, bool):  # store_true flags
+            if not isinstance(value, bool):
+                raise ValueError(f"{path}: '{key}' must be true or false")
+        elif action.option_strings and action.default is not None and not isinstance(action.default, list) \
+                and not isinstance(value, type(action.default)) \
+                and not (isinstance(action.default, float) and isinstance(value, int)):
+            raise ValueError(f"{path}: '{key}' must be a {type(action.default).__name__}")
+        if action.choices and value not in action.choices:
+            raise ValueError(f"{path}: '{key}' must be one of {list(action.choices)}")
+        if dest == "header":
+            value = [value] if isinstance(value, str) else list(value)
+        out[dest] = value
+    return out
+
+
 def _resolve_format(args):
     """Report format from --format, or from the --output extension."""
     if args.format:
@@ -114,6 +176,15 @@ def _resolve_format(args):
 
 def main(argv=None) -> int:
     parser = build_parser()
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--config")
+    config_path = pre.parse_known_args(argv)[0].config
+    if config_path:
+        try:
+            parser.set_defaults(**load_config(config_path, parser))
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 2
     args = parser.parse_args(argv)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.WARNING,
@@ -125,9 +196,16 @@ def main(argv=None) -> int:
     if args.list_checks:
         print(_format_check_list())
         return 0
-    target = args.target or args.target_pos
-    if not target:
-        parser.error("provide the target with --target/-t")
+    targets = [t for t in (args.target or args.target_pos,) if t]
+    if args.targets_file:
+        try:
+            targets += [t for t in load_targets_file(args.targets_file) if t not in targets]
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 2
+    if not targets:
+        parser.error("provide the target with --target/-t (or a list with --targets-file/-T)")
+    target_label = targets[0] if len(targets) == 1 else f"{len(targets)} targets"
     if args.new_only and not args.baseline:
         parser.error("--new-only requires --baseline")
     if args.allow_active and not args.scope:
@@ -141,10 +219,10 @@ def main(argv=None) -> int:
         except ScopeError as e:
             print(f"Error: {e}", file=sys.stderr)
             return 2
-        host = extract_domain(target)
-        if not scope.allows(host):
-            print(f"Error: target '{host}' is OUT of the scope defined in {args.scope}. "
-                  "No request was sent.", file=sys.stderr)
+        outside = [extract_domain(t) for t in targets if not scope.allows(extract_domain(t))]
+        if outside:  # all-or-nothing: never scan half a list and surprise the user
+            print(f"Error: target(s) {', '.join(repr(h) for h in outside)} are OUT of the scope "
+                  f"defined in {args.scope}. No request was sent.", file=sys.stderr)
             return 2
 
     fmt = _resolve_format(args)
@@ -168,6 +246,14 @@ def main(argv=None) -> int:
                   "(use only with explicit authorization from the target owner).", file=sys.stderr)
             return 2
 
+    extra_probes = []
+    if args.probes_file:
+        try:
+            extra_probes = load_probes_file(args.probes_file)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 2
+
     baseline = None
     if args.baseline:  # validate before spending a whole scan
         try:
@@ -176,34 +262,41 @@ def main(argv=None) -> int:
             print(f"Error: {e}", file=sys.stderr)
             return 2
 
-    console = progress_cb = None
+    console = None
     if args.rich:
         from . import ui
         if not ui.RICH_AVAILABLE:
             print("Error: --rich requires the 'rich' library (pip install rich).", file=sys.stderr)
             return 2
         console = ui.make_console(no_color=args.no_color)
-        ui.print_banner(console, target, args.mode)
+        ui.print_banner(console, target_label, args.mode)
 
     try:
         config = ScanConfig(
             timeout=args.timeout, rate=args.rate, concurrency=args.concurrency, retries=args.retries,
             proxy=args.proxy, headers=_parse_headers(args.header), user_agent=args.user_agent,
             verify=not args.insecure, allow_active=args.allow_active,
-            scope=scope, ports=_parse_ports(args.ports) if args.ports else None)
+            scope=scope, ports=_parse_ports(args.ports) if args.ports else None,
+            extra_probes=extra_probes)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 2
 
-    if console is not None:
-        from . import ui
-        with ui.make_progress(console) as progress:
-            reporter = ui.ProgressReporter(progress, planned_checks(args.mode, checks, config))
-            findings = scan_target(target, mode=args.mode, web_checks=checks, config=config,
-                                   progress_cb=reporter.on_event)
-    else:
-        findings = scan_target(target, mode=args.mode, web_checks=checks, config=config)
-    meta = {"target": target, "mode": args.mode}
+    findings = []
+    for target in targets:
+        if console is not None:
+            from . import ui
+            if len(targets) > 1:
+                console.print(f"\n[bold]→ {target}[/]")
+            with ui.make_progress(console) as progress:
+                reporter = ui.ProgressReporter(progress, planned_checks(args.mode, checks, config))
+                findings += scan_target(target, mode=args.mode, web_checks=checks, config=config,
+                                        progress_cb=reporter.on_event)
+        else:
+            findings += scan_target(target, mode=args.mode, web_checks=checks, config=config)
+    meta = {"target": target_label, "mode": args.mode}
+    if len(targets) > 1:
+        meta["targets"] = targets
     if scope:
         meta["scope"] = args.scope
     if baseline is not None:

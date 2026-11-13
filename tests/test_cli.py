@@ -69,7 +69,7 @@ def _dispatch(mode):
     from unittest.mock import AsyncMock
     web, mail, sub = AsyncMock(return_value=[]), AsyncMock(return_value=[]), AsyncMock(return_value=[])
     with patch("scanner.core.scan_web_async", web), patch("scanner.core.scan_email_async", mail), \
-         patch.dict("scanner.core.ASYNC_CHECKS", {"subdomains": sub}):
+         patch.dict("scanner.core.ASYNC_CHECKS", {"subdomains": sub, "subdomain_takeover": AsyncMock(return_value=[])}):
         scan_target("https://Ex.com:8443/x", mode=mode)
     return web.called, mail.called, sub.called, mail
 
@@ -166,3 +166,66 @@ def test_rich_without_library_fails_cleanly(monkeypatch, capsys):
     monkeypatch.setattr(ui, "RICH_AVAILABLE", False)
     code, m = run(["-t", "ex.com", "--rich"])
     assert code == 2 and not m.called and "pip install rich" in capsys.readouterr().err
+
+
+# ---------- multi-target and config file ----------
+def _go(argv, capsys, fake=None):
+    """main() with scan_target faked; returns (exit code, captured scan kwargs, stderr)."""
+    seen, kw = [], {}
+
+    def default(t, **k):
+        seen.append(t)
+        kw.update(k)
+        return []
+    with patch("scanner.cli.scan_target", side_effect=fake or default) as m:
+        code = main(argv)
+    return code, seen, kw, capsys.readouterr().err, m
+
+
+def test_targets_file_scans_each_target_and_dedupes(tmp_path, capsys):
+    f = tmp_path / "t.txt"
+    f.write_text("a.com\n# comment\nb.com  # trailing\n\na.com\n")
+    code, seen, *_ = _go(["-T", str(f), "-m", "web"], capsys)
+    assert code == 0 and seen == ["a.com", "b.com"]
+
+
+def test_targets_file_combines_with_t_and_bad_files_fail(tmp_path, capsys):
+    f = tmp_path / "t.txt"
+    f.write_text("b.com\n")
+    assert _go(["-t", "a.com", "-T", str(f)], capsys)[1] == ["a.com", "b.com"]
+    assert _go(["-T", str(tmp_path / "nope.txt")], capsys)[0] == 2
+    empty = tmp_path / "e.txt"
+    empty.write_text("# nothing\n")
+    assert _go(["-T", str(empty)], capsys)[0] == 2
+
+
+def test_scope_is_all_or_nothing_for_target_lists(tmp_path, capsys):
+    scope = tmp_path / "s.txt"
+    scope.write_text("a.com\n")
+    f = tmp_path / "t.txt"
+    f.write_text("a.com\nb.com\n")
+    code, seen, _, err, _ = _go(["-T", str(f), "--scope", str(scope)], capsys)
+    assert code == 2 and "b.com" in err and seen == []
+
+
+def test_config_file_sets_defaults_and_cli_wins(tmp_path, capsys):
+    cfg = tmp_path / "wvs.toml"
+    cfg.write_text('rate = 3\nmode = "web"\nheader = ["X-A: 1"]\nports = [22, 80]\nno-info = true\n')
+    code, _, kw, _, _ = _go(["-t", "ex.com", "--config", str(cfg), "--rate", "7"], capsys)
+    assert code == 0 and kw["mode"] == "web"
+    assert kw["config"].rate == 7  # the flag beats the file
+    assert kw["config"].headers == {"X-A": "1"} and kw["config"].ports == [22, 80]
+
+
+@pytest.mark.parametrize("body", ["bogus = 1", 'rate = "fast"', 'mode = "nope"', "rate = ", 'rich = "yes"'])
+def test_invalid_config_is_rejected(tmp_path, capsys, body):
+    cfg = tmp_path / "wvs.toml"
+    cfg.write_text(body + "\n")
+    code, _, _, err, m = _go(["-t", "ex.com", "--config", str(cfg)], capsys)
+    assert code == 2 and "Error" in err and not m.called
+
+
+def test_probes_file_flag_rejects_bad_file(tmp_path, capsys):
+    bad = tmp_path / "p.json"
+    bad.write_text("nope")
+    assert _go(["-t", "ex.com", "--probes-file", str(bad)], capsys)[0] == 2
