@@ -34,7 +34,10 @@ def test_scan_returns_findings():
         r = client.post("/scan", json={"url": "https://8.8.8.8", "checks": ["headers"]})
     assert r.status_code == 200
     assert r.json()[0]["severity"] == "high"
-    mock_scan.assert_called_once_with("https://8.8.8.8", checks=["headers"])
+    args, kwargs = mock_scan.call_args
+    assert args == ("https://8.8.8.8",) and kwargs["checks"] == ["headers"]
+    cfg = kwargs["config"]  # untrusted callers: SSRF guard on, no active checks, bounded duration
+    assert cfg.public_only and not cfg.allow_active and cfg.max_duration
 
 
 @pytest.mark.parametrize("url", [
@@ -60,3 +63,13 @@ def test_scan_rate_limited():
                  for _ in range(11)]
     assert codes[:10] == [200] * 10
     assert codes[10] == 429
+
+
+def test_api_key_required_when_configured(monkeypatch):
+    monkeypatch.setenv("WVS_API_KEY", "s3cret")
+    with patch("api.main.scan", return_value=[]):
+        assert client.post("/scan", json={"url": "https://8.8.8.8"}).status_code == 401
+        bad = client.post("/scan", json={"url": "https://8.8.8.8"}, headers={"X-API-Key": "nope"})
+        assert bad.status_code == 401
+        ok = client.post("/scan", json={"url": "https://8.8.8.8"}, headers={"X-API-Key": "s3cret"})
+        assert ok.status_code == 200

@@ -101,7 +101,7 @@ async def _http_methods(ctx) -> list:
 async def _directory_listing(ctx) -> list:
     responses = await asyncio.gather(*[_get(ctx, p) for p in LISTING_PATHS])
     findings = []
-    for path, r in zip(LISTING_PATHS, responses):
+    for path, r in zip(LISTING_PATHS, responses, strict=True):
         if r is None or r.status_code != 200 or not _LISTING.search(r.text[:20000]):
             continue
         names = re.findall(r'href="([^"?#]+)"', r.text)

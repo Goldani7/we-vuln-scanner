@@ -14,6 +14,7 @@ evidence: values are masked.
 Note: only a fixed list of paths is tested (no brute-force/wordlist).
 """
 import asyncio
+import json
 import re
 import uuid
 from dataclasses import dataclass
@@ -167,6 +168,23 @@ PROBES = [
     Probe("/openapi.json", Severity.LOW, "Exposed API documentation (OpenAPI)",
           _regex(r"\"openapi\"|\"swagger\"", html_ok=True),
           "Restrict the documentation to authenticated users in production.", "CWE-200", "exposed.api-docs"),
+    Probe("/v3/api-docs", Severity.LOW, "Exposed API documentation (Spring OpenAPI)",
+          _regex(r"\"openapi\"|\"swagger\"", html_ok=True),
+          "Restrict the documentation to authenticated users in production.", "CWE-200", "exposed.api-docs"),
+    Probe("/swagger-ui.html", Severity.LOW, "Exposed Swagger UI",
+          _regex(r"swagger-ui|Swagger UI", html_ok=True),
+          "Restrict the documentation to authenticated users in production.", "CWE-200", "exposed.api-docs"),
+    Probe("/actuator/heapdump", Severity.CRITICAL, "Exposed Spring Boot heap dump",
+          _magic(b"JAVA PROFILE"),
+          "Disable the heapdump endpoint; a heap dump contains live secrets, tokens and sessions. "
+          "Rotate anything it may hold.", "CWE-497", "exposed.heapdump"),
+    Probe("/composer.json", Severity.LOW, "Exposed composer.json (lists PHP dependencies)",
+          _regex(r"\"require\"\s*:", html_ok=True), _FILE_FIX, "CWE-200", "exposed.dependency-manifest"),
+    Probe("/package.json", Severity.LOW, "Exposed package.json (lists Node dependencies)",
+          _regex(r"\"(dependencies|devDependencies|scripts)\"\s*:", html_ok=True), _FILE_FIX,
+          "CWE-200", "exposed.dependency-manifest"),
+    Probe("/.svn/entries", Severity.HIGH, "Exposed .svn repository",
+          _regex(r"^\d{1,2}\s*\n\s*dir\s*\n"), REMOVE.format(extra=""), "CWE-540", "exposed.svn"),
     Probe("/robots.txt", Severity.INFO, "robots.txt present", _robots_validator,
           "Don't use robots.txt to hide sensitive areas: it's public. Protect them with authentication.",
           "CWE-200", "exposed.robots"),
@@ -174,6 +192,38 @@ PROBES = [
           "Restrict the panel by IP/VPN and require strong authentication (MFA).", "CWE-668",
           "exposed.admin", statuses=(200, 401)),
 ]
+
+
+def load_probes_file(path: str) -> list:
+    """User-defined probes from a JSON file (`--probes-file`), so adding a signature needs no Python.
+
+    [{"path": "/config.old", "title": "Old config exposed", "severity": "high",
+      "regex": "DB_PASSWORD", "remediation": "Remove it.", "cwe": "CWE-538",
+      "rule": "custom.config-old", "mask": true, "html_ok": false}]
+    `regex` is required: a probe without a content signature would be a false-positive factory.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            entries = json.load(fh)
+    except (OSError, ValueError) as e:
+        raise ValueError(f"cannot read probes file '{path}': {e}") from e
+    if not isinstance(entries, list):
+        raise ValueError(f"{path}: expected a JSON list of probes")
+    probes = []
+    for i, e in enumerate(entries, 1):
+        try:
+            path_, title, rx = e["path"], e["title"], e["regex"]
+            if not str(path_).startswith("/"):
+                raise ValueError("path must start with '/'")
+            sev = Severity(str(e.get("severity", "medium")).lower())
+            probes.append(Probe(
+                path_, sev, title,
+                _regex(rx, html_ok=bool(e.get("html_ok", False)), mask=bool(e.get("mask", False))),
+                e.get("remediation", "Remove the file or block access to it."),
+                e.get("cwe", "CWE-538"), e.get("rule", f"custom.{i}")))
+        except (KeyError, TypeError, ValueError, re.error) as err:
+            raise ValueError(f"{path}: probe #{i} is invalid ({type(err).__name__}: {err})") from err
+    return probes
 
 
 async def _fetch(ctx, url: str):
@@ -192,13 +242,14 @@ def _same_as_baseline(resp, baseline) -> bool:
 
 async def check_exposed_files(ctx) -> list:
     base_url = ctx.url
+    probes = PROBES + list(ctx.config.extra_probes or [])
     baseline, *responses = await asyncio.gather(
         _fetch(ctx, urljoin(base_url, f"/{uuid.uuid4().hex}")),
-        *[_fetch(ctx, urljoin(base_url, p.path)) for p in PROBES],
+        *[_fetch(ctx, urljoin(base_url, p.path)) for p in probes],
     )
 
     findings, seen_rules = [], set()
-    for probe, resp in zip(PROBES, responses):
+    for probe, resp in zip(probes, responses, strict=True):
         if resp is None or resp.status_code not in probe.statuses:
             continue
         url = urljoin(base_url, probe.path)
@@ -235,7 +286,7 @@ async def check_exposed_files(ctx) -> list:
     if not any(f.severity is not Severity.INFO for f in findings):
         findings.append(Finding(
             CHECK, Severity.INFO, "No common sensitive file exposed",
-            f"{len(PROBES)} paths checked (content validated by signature).",
+            f"{len(probes)} paths checked (content validated by signature).",
             rule_id="exposed.none",
         ))
     return findings

@@ -59,3 +59,21 @@ def test_a_crashing_check_does_not_break_the_scan():
     err = [f for f in findings if f.rule == "cors.error"]
     assert err and "RuntimeError: bug" in err[0].detail
     assert any(f.check == "headers" for f in findings)  # os outros checks seguiram
+
+
+def test_deadline_cancels_slow_checks_and_reports_it():
+    import asyncio
+
+    from scanner import core
+
+    async def fast(ctx):
+        return [core.Finding("fast", core.Severity.LOW, "ok")]
+
+    async def slow(ctx):
+        await asyncio.sleep(30)
+        return []
+
+    jobs = [core._safe("fast", fast(None)), core._safe("slow", slow(None))]
+    out = asyncio.run(core._gather_with_deadline(jobs, 0.2))
+    assert any(f.title == "ok" for f in out)
+    assert any(f.rule_id == "core.deadline" for f in out)
