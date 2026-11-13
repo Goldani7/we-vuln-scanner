@@ -75,3 +75,11 @@ def test_bootstrap_3_and_4_branches():
     assert check_js_libs(page('<script src="/bootstrap-3.3.7.js"></script>'))[0].metadata["fixed_in"] == "3.4.1"
     assert check_js_libs(page('<script src="/bootstrap-4.1.0.js"></script>'))[0].metadata["fixed_in"] == "4.3.1"
     assert check_js_libs(page('<script src="/bootstrap-5.3.0.js"></script>')) == []
+
+
+def test_jquery_ui_and_other_lookalikes_are_not_mistaken_for_the_core_library():
+    for url in ("https://cdnjs.cloudflare.com/ajax/libs/jqueryui/1.12.1/jquery-ui.min.js",
+                "https://x/jquery-ui-1.12.1.min.js", "https://x/jquery.mobile-1.4.5.min.js",
+                "https://x/ajax/libs/angular-material/1.1.0/a.js", "https://x/bootstrap-icons-1.5.0.js"):
+        assert detect_libs(url) == [], url
+    assert ("jQuery", "3.3.1") in detect_libs("https://cdnjs.cloudflare.com/ajax/libs/jquery/3.3.1/jquery.min.js")

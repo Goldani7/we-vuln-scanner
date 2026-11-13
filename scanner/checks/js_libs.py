@@ -46,7 +46,7 @@ def detect_libs(url: str) -> list:
     found = []
     for lib, (name_rx, *_rest) in LIBS.items():
         m = re.search(rf"(?<![a-z0-9]){name_rx}{_VERSION}", path) or \
-            re.search(rf"/{name_rx.split('(')[0]}[a-z.]*/v?(\d+\.\d+(?:\.\d+)?)/", path)
+            re.search(rf"/{name_rx.split('(')[0]}(?:\.js)?/v?(\d+\.\d+(?:\.\d+)?)/", path)
         if m:
             found.append((lib, m.group(1)))
     return found

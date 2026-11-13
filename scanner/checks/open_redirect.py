@@ -17,6 +17,7 @@ from ..http import RequestFailed
 
 CHECK = "open_redirect"
 PROBE_HOST = "wvs-open-redirect-probe.test"
+PROBE_URL = f"https://{PROBE_HOST}/"
 PARAMS = ("next", "url", "redirect", "redirect_uri", "redirect_url", "return", "returnUrl",
           "return_to", "continue", "dest", "destination", "redir", "r", "goto", "target")
 _REDIRECT_PARAM = re.compile(r"^(" + "|".join(PARAMS) + r")$", re.I)
@@ -25,7 +26,7 @@ MAX_PROBES = 30
 
 def _candidates(base: str, page: str) -> list:
     """URLs to probe: (path "/" x common params) + homepage links that already carry such a param."""
-    probe = f"https://{PROBE_HOST}/"
+    probe = PROBE_URL
     host = urlparse(base).hostname
     seen, out = set(), []
 
@@ -68,12 +69,13 @@ async def check_open_redirect(ctx) -> list:
                 break
             continue
         if _redirects_to_probe(r, url):
-            vulnerable.append((url, r.status_code, r.headers.get("location", "")))
+            param = next((k for k, v in parse_qsl(urlparse(url).query) if v == PROBE_URL), "?")
+            vulnerable.append((url, param, r.status_code, r.headers.get("location", "")))
     if not vulnerable:
         return [Finding(CHECK, Severity.INFO, "No open redirect found among the tested parameters",
                         rule_id="redirect.none")]
     return [Finding(
-        CHECK, Severity.MEDIUM, f"Open redirect via '{parse_qsl(urlparse(u).query)[0][0]}' parameter",
+        CHECK, Severity.MEDIUM, f"Open redirect via '{param}' parameter",
         "The server redirects to an arbitrary external URL taken from the query string. "
         "Attackers use it to make phishing links look like they belong to this domain.",
         "Only redirect to relative paths or to an allowlist of known destinations; never "
@@ -81,4 +83,4 @@ async def check_open_redirect(ctx) -> list:
         {"url": u, "status": status, "location": loc}, evidence=f"GET {u} → {status} Location: {loc}",
         cwe="CWE-601", confidence="high", rule_id="redirect.open",
         references=["https://cheatsheetseries.owasp.org/cheatsheets/Unvalidated_Redirects_and_Forwards_Cheat_Sheet.html"])
-        for u, status, loc in vulnerable]
+        for u, param, status, loc in vulnerable]
