@@ -1,13 +1,12 @@
 import json
+from unittest.mock import patch
 
 import pytest
 
 from scanner.baseline import BaselineError, annotate, compare, load_baseline
 from scanner.cli import main
 from scanner.finding import Finding, Severity
-from scanner.report import to_markdown, to_sarif, to_text
-
-from unittest.mock import patch
+from scanner.report import to_markdown, to_sarif
 
 
 def F(title, sev=Severity.HIGH, rule="r"):
