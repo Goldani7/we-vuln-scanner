@@ -16,7 +16,7 @@ import os
 import time
 from pathlib import Path
 
-import requests
+import httpx
 
 from . import nvd
 from .finding import Severity
@@ -63,10 +63,10 @@ def _fresh(ts) -> bool:
 
 def _get_json(url: str, timeout: float, params=None):
     try:
-        r = requests.get(url, params=params, timeout=timeout)
+        r = httpx.get(url, params=params, timeout=timeout, follow_redirects=True)
         r.raise_for_status()
         return r.json()
-    except (requests.RequestException, ValueError) as e:
+    except (httpx.HTTPError, ValueError) as e:
         raise ThreatIntelError(f"{url}: {e}") from e
 
 
